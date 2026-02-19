@@ -23,7 +23,9 @@ def convert_mp4_to_mp3(input_path: str, output_path: str = None) -> None:
         '-i', input_path,
         '-vn',
         '-acodec', 'libmp3lame',
-        '-ab', '192k',
+        '-ab', '96k',
+        '-ar', '16000',
+        '-ac', '1',
         output_path
     ]
 
