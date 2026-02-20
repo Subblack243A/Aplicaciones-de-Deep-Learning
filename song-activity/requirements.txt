@@ -5,5 +5,9 @@ librosa
 matplotlib
 tensorflow
 jiwer
-scipy==1.17.0
+scipy==1.10.1
 soundfile==0.13.1
+
+# Translation
+argostranslate==1.9.6
+tqdm==4.66.1

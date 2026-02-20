@@ -17,6 +17,7 @@ from model import ASRModel
 from dataset import LibriSpeechDataset
 from trainer import Trainer
 from predictor import Predictor
+from traduction import TranslationService
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_VERBOSITY"] = "error"
@@ -165,6 +166,17 @@ def predict(args):
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(result)
         print(f"Transcripción guardada en '{args.output}'")
+        
+        # Traducir resultado usando TranslationService
+        if args.target_lang and args.target_lang.lower() != "none":
+            print(f"\nTraduciendo al idioma '{args.target_lang}'...")
+            translator = TranslationService(from_code="en", to_code=args.target_lang)
+            
+            # Generar el nombre de archivo con sufijo del idioma
+            base_name, _ = os.path.splitext(args.output)
+            output_translated = f"{base_name}_{args.target_lang}.txt"
+            
+            translator.translate_file(args.output, output_translated)
 
     return result
 
@@ -267,6 +279,10 @@ Ejemplos:
     predict_parser.add_argument(
         "--output", type=str, default=None,
         help="Archivo para guardar la transcripción"
+    )
+    predict_parser.add_argument(
+        "--target_lang", type=str, default="es",
+        help="Idioma destino para la traducción (ej: es, fr, etc.). Usa 'none' para deshabilitar traducción (default: es)"
     )
     predict_parser.add_argument(
         "--sample_rate", type=int, default=16000,
