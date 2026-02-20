@@ -5,7 +5,5 @@ librosa
 matplotlib
 tensorflow
 jiwer
-# For AMD GPU support (RX 7600) on Windows:
-# 1. Use Python 3.10 (Not supported on 3.13)
-# 2. pip install tensorflow-cpu==2.10
-# 3. pip install tensorflow-directml-plugin
+scipy==1.17.0
+soundfile==0.13.1
