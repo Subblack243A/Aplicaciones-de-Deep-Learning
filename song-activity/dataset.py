@@ -3,6 +3,7 @@ LibriSpeechDataset: Descarga, carga y preprocesamiento del dataset LibriSpeech
 para entrenamiento del modelo ASR.
 """
 
+from __future__ import annotations
 import os
 import tarfile
 import urllib.request

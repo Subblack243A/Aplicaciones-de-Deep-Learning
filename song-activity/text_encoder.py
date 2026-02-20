@@ -3,6 +3,7 @@ TextEncoder: Codificación y decodificación de texto a secuencias de enteros.
 Define el vocabulario (caracteres a-z, espacio, apóstrofe, paréntesis) y el token blank para CTC.
 """
 
+from __future__ import annotations
 import numpy as np
 import tensorflow as tf
 

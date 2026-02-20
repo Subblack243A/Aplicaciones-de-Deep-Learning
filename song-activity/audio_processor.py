@@ -3,6 +3,7 @@ AudioProcessor: Carga, normalización y transformación de audio a espectrograma
 Utiliza librosa para el procesamiento de audio.
 """
 
+from __future__ import annotations
 import os
 import sys
 import numpy as np
