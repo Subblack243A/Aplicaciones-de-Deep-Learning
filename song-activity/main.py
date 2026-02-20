@@ -24,21 +24,26 @@ def process_video_pipeline(video_path):
         print("Error: No se pudo generar el archivo MP3.")
         return
         
-    print(f"[2/4] Cargando audio y aplicando HPSS manual...")
-    y, sr = librosa.load(mp3_path)
+    print(f"[2/4] Cargando audio (16kHz) y aplicando HPSS manual...")
+    y, sr = librosa.load(mp3_path, sr=16000)
     
-    # y_harm contiene la parte armónica (VOZ)
-    # y_perc contiene la parte percusiva (Ritmo)
-    y_harm, y_perc = hpss_manual(y, sr)
-    voice_filename = f"{base_name}_voice.wav"
-    bg_filename = f"{base_name}_background.wav"
+    print(f"      -> Ejecutando HPSS (margin_h=2.5, margin_p=1.0, kernel=31)...")
+    y_voice, y_drums, y_music = hpss_manual(y, sr, margin_harmonic=2.5, margin_percussive=1.0, kernel_size=31)
     
-    sf.write(voice_filename, y_harm, sr)
-    sf.write(bg_filename, y_perc, sr)
-    print(f"      -> Voz guardada en: {voice_filename}")
-    print(f"      -> Fondo guardado en: {bg_filename}")
+    # Guardar resultados
+    voice_path = base_name + "_voice.wav"
+    drums_path = base_name + "_drums.wav"
+    music_path = base_name + "_music_no_voice.wav"
+    
+    sf.write(voice_path, y_voice, sr)
+    sf.write(drums_path, y_drums, sr)
+    sf.write(music_path, y_music, sr)
+    
+    print(f"      -> Voz guardada en: {os.path.basename(voice_path)}")
+    print(f"      -> Batería (Percusión) guardada en: {os.path.basename(drums_path)}")
+    print(f"      -> Música (Sin voz) guardada en: {os.path.basename(music_path)}")
     print(f"[3/4] Generando Espectrograma de Mel manual para la voz...")
-    mel_spec = mel_spectrogram_manual(y_harm, sr)
+    mel_spec = mel_spectrogram_manual(y_voice, sr)
     
     mel_image_filename = f"{base_name}_voice_mel.png"
     plt.figure(figsize=(10, 4))
@@ -52,7 +57,7 @@ def process_video_pipeline(video_path):
     print(f"      -> Imagen guardada en: {mel_image_filename}")
     
     print(f"[4/4] Proceso Completado.")
-    print(f"\nLISTO PARA STT: El archivo de audio limpio para el modelo de voz a texto es:\n{os.path.abspath(voice_filename)}")
+    print(f"\nLISTO PARA STT: El archivo de audio limpio para el modelo de voz a texto es:\n{os.path.abspath(voice_path)}")
 
 def main():
     if len(sys.argv) < 2:

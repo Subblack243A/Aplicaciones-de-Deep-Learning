@@ -20,11 +20,15 @@ Para una correcta ejecución del programa se necesitará tener en cuenta las sig
 - `numpy`, `scipy`: Para cálculos matemáticos (HPSS, Filtros Mel).
 - `librosa`, `soundfile`: Para carga/guardado de audio y STFT base.
 - `matplotlib`: Para visualizar espectrogramas.
-- `ffmpeg`: EjecutablePara instalar todas estas librerías solo es necesario correr el siguiente comando:
+- `ffmpeg`: Ejecutable del sistema (debe estar en el PATH).
+
+Para instalar todas estas librerías solo es necesario correr el siguiente comando:
 
 ```bash
 pip install -r song-activity/requirements.txt
 ```
+
+---
 
 ## 3. Documentación Técnica: Procesamiento de Audio Manual
 
@@ -48,10 +52,14 @@ El algoritmo se basa en la diferente morfología de los sonidos en un espectrogr
         $$H(t, f) = \text{median}(|D(t, f)|, \text{kernel}_{time})$$
     - **Vertical ($P$)**: Resalta estructuras percusivas.
         $$P(t, f) = \text{median}(|D(t, f)|, \text{kernel}_{freq})$$
-3. **Enmascaramiento (Masking)**:
-    Se crean máscaras binarias (Hard Masking) comparando las imágenes filtradas:
-    $$M_h(t, f) = \begin{cases} 1 & \text{si } H(t, f) > P(t, f) \\ 0 & \text{otros} \end{cases}$$
-    $$M_p(t, f) = \begin{cases} 1 & \text{si } P(t, f) \ge H(t, f) \\ 0 & \text{otros} \end{cases}$$
+3. **Enmascaramiento Suave (Soft Masking / Wiener Filter)**:
+    Originalmente usamos máscaras binarias (Hard Masking), pero generaban distorsión. Para mejorar la calidad, implementamos **Soft Masking**:
+
+    $$M_h(t, f) = \frac{H(t, f)}{H(t, f) + P(t, f)}$$
+    $$M_p(t, f) = \frac{P(t, f)}{H(t, f) + P(t, f)}$$
+
+    Esto permite que una frecuencia pertenezca "parcialmente" a ambas fuentes, suavizando el sonido resultante.
+
 4. **Reconstrucción**:
     $$x_{armónico} = iSTFT(M_h \cdot D)$$
 
