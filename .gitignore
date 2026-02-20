@@ -18,3 +18,4 @@ __pycache__/
 # Modelos guardados
 model_saved/
 checkpoints/
+*.result.txt
