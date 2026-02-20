@@ -66,8 +66,9 @@ class Predictor:
 
         # Decodificar
         if beam_width:
-            return self.decode_beam(y_pred, beam_width)
-        return self.decode_greedy(y_pred)
+            return self.encoder.decode_beam(y_pred, beam_width)
+        response = self.encoder.decode_greedy(y_pred, audio_path)
+        return response
 
     def transcribe_video(self, video_path: str, beam_width: int = None) -> str:
         """
@@ -119,42 +120,7 @@ class Predictor:
                 if ext != '.wav' and os.path.isfile(wav_path) and wav_path != input_path:
                     os.remove(wav_path)
 
-    def decode_greedy(self, y_pred: np.ndarray) -> str:
-        """
-        Decodifica predicciones usando decodificación greedy.
 
-        Args:
-            y_pred: Predicciones del modelo (batch_size, time_steps, vocab_size+1).
-
-        Returns:
-            Texto decodificado.
-        """
-        input_len = np.ones(y_pred.shape[0]) * y_pred.shape[1]
-        decoded, _ = tf.keras.backend.ctc_decode(y_pred, input_len, greedy=True)
-        decoded_indices = tf.cast(decoded[0], dtype=tf.int32).numpy()[0]
-        # Filtrar valores -1 (padding)
-        decoded_indices = [idx for idx in decoded_indices if idx >= 0]
-        return self.encoder.decode(decoded_indices)
-
-    def decode_beam(self, y_pred: np.ndarray, beam_width: int = 10) -> str:
-        """
-        Decodifica predicciones usando beam search.
-
-        Args:
-            y_pred: Predicciones del modelo.
-            beam_width: Ancho del beam search.
-
-        Returns:
-            Texto decodificado.
-        """
-        input_len = np.ones(y_pred.shape[0]) * y_pred.shape[1]
-        decoded, _ = tf.keras.backend.ctc_decode(
-            y_pred, input_len, greedy=False,
-            beam_width=beam_width, top_paths=1
-        )
-        decoded_indices = tf.cast(decoded[0], dtype=tf.int32).numpy()[0]
-        decoded_indices = [idx for idx in decoded_indices if idx >= 0]
-        return self.encoder.decode(decoded_indices)
 
     @staticmethod
     def calculate_wer(reference: str, hypothesis: str) -> float:

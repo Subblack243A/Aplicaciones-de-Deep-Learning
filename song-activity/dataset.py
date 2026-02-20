@@ -197,144 +197,89 @@ class LibriSpeechDataset:
             print(f"Error procesando {audio_path}: {e}")
             return None
 
-    def create_tf_dataset(self, batch_size: int = 16, shuffle: bool = True) -> tf.data.Dataset:
+    def create_tf_dataset(self, batch_size: int = 16, shuffle: bool = True) -> tuple[tf.data.Dataset, int]:
         """
         Crea un tf.data.Dataset con padding dinámico para entrenamiento.
 
-        Usa procesamiento lazy: los audios se procesan uno a uno bajo demanda
-        en lugar de precargar todo en memoria.
-
-        El dataset devuelve tuplas con:
-            - espectrograma mel (time, n_mels)
-            - etiquetas codificadas (enteros)
-            - input_length: longitud temporal del espectrograma
-            - label_length: longitud de la etiqueta
+        Pre-procesa todos los audios a numpy arrays en memoria y luego crea
+        tensores puros de TensorFlow. Esto elimina tf.py_function y permite
+        que todo el pipeline de datos se ejecute en GPU.
 
         Args:
             batch_size: Tamaño de batch.
             shuffle: Si se mezclan los datos.
 
         Returns:
-            tf.data.Dataset listo para entrenamiento.
+            Tupla (dataset, num_batches).
         """
         if not self.samples:
             self.load_samples()
 
-        # Filtrar muestras válidas con preprocesamiento rápido
-        # Solo guardamos rutas y transcripciones (strings livianos)
-        valid_samples = []
-        print("Validando muestras de audio...")
+        # === Pre-procesar todas las muestras a numpy arrays ===
+        print("Pre-procesando audio a espectrogramas (esto se hace una vez)...")
+        spectrograms = []
+        labels = []
+        input_lengths = []
+        label_lengths = []
+        errors = 0
+
         for i, (audio_path, transcript) in enumerate(self.samples):
-            if os.path.isfile(audio_path) and len(transcript.strip()) > 0:
-                valid_samples.append((audio_path, transcript))
-            if (i + 1) % 2000 == 0:
-                print(f"  Validadas {i + 1}/{len(self.samples)} muestras...")
+            result = self._process_sample(audio_path, transcript)
+            if result is not None:
+                spec, lab = result
+                spectrograms.append(spec)
+                labels.append(lab)
+                input_lengths.append(spec.shape[0])
+                label_lengths.append(len(lab))
+            else:
+                errors += 1
 
-        print(f"Muestras válidas: {len(valid_samples)}")
+            if (i + 1) % 500 == 0:
+                print(f"  Procesadas {i + 1}/{len(self.samples)} muestras...")
 
-        # Capturar parámetros para el closure
-        sample_rate = self.sample_rate
-        n_mels = self.n_mels
-        n_fft = self.processor.n_fft
-        hop_length = self.processor.hop_length
-        fmin = self.processor.fmin
-        fmax = self.processor.fmax
-        max_audio_len = self.max_audio_len
-        encoder = self.encoder
+        print(f"Pre-procesamiento completado: {len(spectrograms)} válidas, {errors} errores")
 
-        def _process_lazy(audio_path_tensor, transcript_tensor):
-            """Procesa una muestra de forma lazy dentro de tf.py_function."""
-            audio_path_str = audio_path_tensor.numpy().decode("utf-8")
-            transcript_str = transcript_tensor.numpy().decode("utf-8")
+        if len(spectrograms) == 0:
+            raise ValueError("No se pudieron procesar muestras válidas.")
 
-            try:
-                audio, sr = librosa.load(audio_path_str, sr=sample_rate)
-                mel = librosa.feature.melspectrogram(
-                    y=audio, sr=sr,
-                    n_fft=n_fft,
-                    hop_length=hop_length,
-                    n_mels=n_mels,
-                    fmin=fmin,
-                    fmax=fmax,
-                )
-                mel_db = librosa.power_to_db(mel, ref=np.max)
-                mel_db = AudioProcessor.normalize(mel_db)
-                mel_db = mel_db.T  # (n_mels, time) -> (time, n_mels)
+        # === Pad arrays a longitud máxima para crear tensores uniformes ===
+        max_spec_len = self.max_audio_len if self.max_audio_len else max(s.shape[0] for s in spectrograms)
+        max_lab_len = self.max_label_len if self.max_label_len else max(len(l) for l in labels)
 
-                # Truncar si es necesario
-                if max_audio_len and mel_db.shape[0] > max_audio_len:
-                    mel_db = mel_db[:max_audio_len, :]
+        # Crear arrays con padding
+        n_samples = len(spectrograms)
+        padded_specs = np.zeros((n_samples, max_spec_len, self.n_mels), dtype=np.float32)
+        padded_labels = np.full((n_samples, max_lab_len), self.encoder.BLANK_TOKEN, dtype=np.int32)
+        il_array = np.zeros((n_samples, 1), dtype=np.int32)
+        ll_array = np.zeros((n_samples, 1), dtype=np.int32)
 
-                label = encoder.encode(transcript_str)
+        for i in range(n_samples):
+            spec_len = min(spectrograms[i].shape[0], max_spec_len)
+            lab_len = min(len(labels[i]), max_lab_len)
+            padded_specs[i, :spec_len, :] = spectrograms[i][:spec_len, :]
+            padded_labels[i, :lab_len] = labels[i][:lab_len]
+            il_array[i, 0] = spec_len
+            ll_array[i, 0] = lab_len
 
-                spec = mel_db.astype(np.float32)
-                lab = np.array(label, dtype=np.int32)
-                il = np.array([spec.shape[0]], dtype=np.int32)
-                ll = np.array([len(label)], dtype=np.int32)
+        # Liberar memoria de listas originales
+        del spectrograms, labels, input_lengths, label_lengths
 
-                return spec, lab, il, ll
-            except Exception as e:
-                # Devolver arrays vacíos en caso de error (se filtrarán)
-                return (
-                    np.zeros((1, n_mels), dtype=np.float32),
-                    np.zeros((1,), dtype=np.int32),
-                    np.array([0], dtype=np.int32),
-                    np.array([0], dtype=np.int32),
-                )
+        print(f"Dataset shapes: specs={padded_specs.shape}, labels={padded_labels.shape}")
+        print(f"  Memoria estimada: {padded_specs.nbytes / 1e9:.2f} GB")
 
-        def _tf_process(audio_path, transcript):
-            """Wrapper de tf.py_function para procesamiento lazy."""
-            spec, lab, il, ll = tf.py_function(
-                _process_lazy,
-                [audio_path, transcript],
-                [tf.float32, tf.int32, tf.int32, tf.int32],
-            )
-            # Establecer shapes conocidas para que padded_batch funcione
-            spec.set_shape([None, n_mels])
-            lab.set_shape([None])
-            il.set_shape([1])
-            ll.set_shape([1])
-            return spec, lab, il, ll
-
-        # Crear dataset desde las rutas y transcripciones (livianas en memoria)
-        audio_paths = [s[0] for s in valid_samples]
-        transcripts = [s[1] for s in valid_samples]
-
-        dataset = tf.data.Dataset.from_tensor_slices((audio_paths, transcripts))
+        # === Crear tf.data.Dataset desde tensores (sin tf.py_function) ===
+        dataset = tf.data.Dataset.from_tensor_slices((
+            padded_specs,
+            padded_labels,
+            il_array,
+            ll_array,
+        ))
 
         if shuffle:
-            dataset = dataset.shuffle(buffer_size=min(2000, len(valid_samples)))
+            dataset = dataset.shuffle(buffer_size=min(2000, n_samples))
 
-        # Procesamiento lazy: cada muestra se procesa bajo demanda
-        dataset = dataset.map(
-            _tf_process,
-            num_parallel_calls=tf.data.AUTOTUNE,
-        )
-
-        # Filtrar muestras con error (input_length == 0)
-        dataset = dataset.filter(lambda s, l, il, ll: tf.greater(il[0], 0))
-
-        # Determinar padded_shapes: usar max_audio_len si está definido
-        max_spec_len = max_audio_len if max_audio_len else None
-        max_lab_len = self.max_label_len if self.max_label_len else None
-
-        # Padded batch: alinea las secuencias con padding
-        dataset = dataset.padded_batch(
-            batch_size,
-            padded_shapes=(
-                [max_spec_len, n_mels],   # spectrograms (cap máximo)
-                [max_lab_len],              # labels
-                [1],                        # input_length
-                [1],                        # label_length
-            ),
-            padding_values=(
-                0.0,                                    # pad spectrograms con 0
-                np.int32(encoder.BLANK_TOKEN),          # pad labels con blank
-                np.int32(0),                            # input_length
-                np.int32(0),                            # label_length
-            ),
-            drop_remainder=True,  # Evitar batches parciales con shapes diferentes
-        )
-
+        dataset = dataset.batch(batch_size, drop_remainder=True)
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
-        return dataset
+
+        num_batches = n_samples // batch_size
+        return dataset, num_batches

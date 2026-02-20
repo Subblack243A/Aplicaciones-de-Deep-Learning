@@ -9,6 +9,7 @@ Uso:
 import argparse
 import os
 import sys
+import tensorflow as tf
 
 from text_encoder import TextEncoder
 from audio_processor import AudioProcessor
@@ -17,12 +18,29 @@ from dataset import LibriSpeechDataset
 from trainer import Trainer
 from predictor import Predictor
 
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["HF_HUB_VERBOSITY"] = "error"
 
 def train(args):
     """Ejecuta el pipeline de entrenamiento completo."""
+
     print("\n" + "=" * 60)
     print("  ASR Training Pipeline - DeepSpeech 2")
     print("=" * 60)
+
+    # === Verificar GPU ===
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f"\n  ✓ GPU detectada: {gpus}")
+        # Permitir crecimiento de memoria para DirectML
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            except RuntimeError:
+                pass
+    else:
+        print("\n  ✗ No se detectó GPU. Entrenando en CPU.")
+        print("    Verifica: pip install tensorflow-cpu==2.10 tensorflow-directml-plugin")
 
     encoder = TextEncoder()
     processor = AudioProcessor(
@@ -44,7 +62,7 @@ def train(args):
     )
     train_data.download()
     train_data.load_samples()
-    train_dataset = train_data.create_tf_dataset(batch_size=args.batch_size)
+    train_dataset, train_steps = train_data.create_tf_dataset(batch_size=args.batch_size)
 
     val_dataset = None
     if args.val_split:
@@ -59,7 +77,7 @@ def train(args):
         )
         val_data.download()
         val_data.load_samples()
-        val_dataset = val_data.create_tf_dataset(
+        val_dataset, _ = val_data.create_tf_dataset(
             batch_size=args.batch_size, shuffle=False
         )
 
@@ -85,6 +103,7 @@ def train(args):
         epochs=args.epochs,
         checkpoint_dir=os.path.join(args.save_path, "checkpoints"),
         save_best=True,
+        total_batches=train_steps,
     )
 
     # === 4. Guardar modelo y resultados ===
@@ -183,8 +202,8 @@ Ejemplos:
         help="Número de épocas (default: 50)"
     )
     train_parser.add_argument(
-        "--batch_size", type=int, default=8,
-        help="Tamaño de batch (default: 8)"
+        "--batch_size", type=int, default=32,
+        help="Tamaño de batch (default: 32)"
     )
     train_parser.add_argument(
         "--learning_rate", type=float, default=1e-3,

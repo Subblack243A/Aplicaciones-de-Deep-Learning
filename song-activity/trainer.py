@@ -43,7 +43,7 @@ class Trainer:
     @tf.function(reduce_retracing=True)
     def _train_step(self, batch):
         """
-        Ejecuta un paso de entrenamiento.
+        Ejecuta un paso de entrenamiento en GPU.
 
         Args:
             batch: Tupla (spectrograms, labels, input_lengths, label_lengths).
@@ -144,6 +144,7 @@ class Trainer:
         epochs: int = 50,
         checkpoint_dir: str = "checkpoints",
         save_best: bool = True,
+        total_batches: int = None,
     ):
         """
         Entrena el modelo.
@@ -154,6 +155,7 @@ class Trainer:
             epochs: Número de épocas.
             checkpoint_dir: Directorio para guardar checkpoints.
             save_best: Si guardar el mejor modelo según val_loss.
+            total_batches: Número total de batches por época (para display).
         """
         os.makedirs(checkpoint_dir, exist_ok=True)
         best_val_loss = float("inf")
@@ -173,7 +175,8 @@ class Trainer:
 
                 if (batch_idx + 1) % 10 == 0:
                     avg_loss = np.mean(train_losses[-10:])
-                    print(f"  Época {epoch+1}/{epochs} - Batch {batch_idx+1} - Loss: {avg_loss:.4f}")
+                    batch_info = f"Batch {batch_idx+1}/{total_batches}" if total_batches else f"Batch {batch_idx+1}"
+                    print(f"  Época {epoch+1}/{epochs} - {batch_info} - Loss: {avg_loss:.4f}")
 
             epoch_train_loss = np.mean(train_losses)
             self.history["train_loss"].append(epoch_train_loss)

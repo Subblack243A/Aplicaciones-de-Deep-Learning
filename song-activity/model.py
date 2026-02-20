@@ -97,7 +97,7 @@ class ASRModel:
         )(x)
 
         # === Dense: proyección al vocabulario + blank ===
-        outputs = tf.keras.layers.Dense(vocab_size + 1, activation='softmax', name="output")(x)
+        outputs = tf.keras.layers.Dense(vocab_size + 1, activation='softmax', name="output", dtype='float32')(x)
 
         self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name="asr_deepspeech2")
         return self.model
