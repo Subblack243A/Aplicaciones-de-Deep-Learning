@@ -1,0 +1,16 @@
+name: song-activity-mac
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    # macOS Apple Silicon specific packages for TensorFlow (with Metal GPU support)
+    - tensorflow-macos==2.10.0
+    - tensorflow-metal==0.6.0
+    - ffmpeg-python
+    - numpy<2
+    - librosa
+    - matplotlib
+    - jiwer
