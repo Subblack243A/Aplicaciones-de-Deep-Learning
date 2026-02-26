@@ -40,8 +40,41 @@ sing-activity/
 │   ├── text_utils.py       # Tokenización de texto
 │   ├── audio_utils.py      # Procesamiento de audio
 │   └── visualizer.py      # Visualización de métricas
+├── utils/
+│   └── split_audio.py      # Preprocesamiento y segmentación de audio
 └── dataset/               # Coloca tus archivos wav y transcripts.txt aquí
 ```
+
+## Preprocesamiento de Audio (`split_audio.py`)
+
+El script `utils/split_audio.py` permite preparar archivos de audio crudos antes del entrenamiento. Realiza los siguientes pasos automáticamente:
+
+1. **Resamplea** el audio a 22050 Hz (requerido por Tacotron 2).
+2. **Convierte a mono** si el archivo es estéreo.
+3. **Aplica un filtro pasa-altos** (Butterworth orden 4, corte en 80 Hz) para eliminar ruido de fondo.
+4. **Normaliza el pico** a −3 dB para dar headroom al vocoder.
+5. **Divide** el audio preprocesado en N segmentos iguales y los guarda en la misma carpeta.
+
+### Uso desde la línea de comandos
+
+Edita la ruta y el número de segmentos al final del archivo y ejecútalo directamente:
+
+```bash
+python utils/split_audio.py
+```
+
+### Uso como módulo
+
+```python
+from utils.split_audio import split_wav
+
+# Divide "cancion.wav" en 8 segmentos preprocesados
+split_wav("dataset/wavs/cancion.wav", num_segments=8)
+```
+
+Los archivos resultantes se guardan en la misma carpeta que el original con el sufijo `_01.wav`, `_02.wav`, etc.
+
+> **Nota:** Los segmentos generados ya están listos para colocarse en `dataset/wavs/` y referenciarse en `transcripts.txt`.
 
 ## Preparación del Dataset
 
