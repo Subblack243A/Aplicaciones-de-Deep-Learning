@@ -35,7 +35,7 @@ class Tacotron2Config:
 
     # Entrenamiento
     learning_rate = 1e-3
-    batch_size = 16
+    batch_size = 4
     epochs = 500
     weight_decay = 1e-6
 

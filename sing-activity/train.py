@@ -8,12 +8,14 @@ from utils.audio_utils import AudioProcessor
 from utils.visualizer import TrainingVisualizer
 import os
 
-# ── Detectar dispositivo ──────────────────────────────────────────────────────
+# ── Detectar dispositivo ─────────────────────────────────────────────────────
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if device.type == 'cuda':
-    torch.backends.cudnn.benchmark = True          # kernels más rápidos
-    print(f"[GPU] {torch.cuda.get_device_name(0)} | "
-        f"VRAM libre: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+    # Limitar uso de VRAM al 70% para evitar desbordamiento
+    torch.cuda.set_per_process_memory_fraction(0.70)
+    torch.cuda.empty_cache()
+    vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+    print(f"[GPU] {torch.cuda.get_device_name(0)} | VRAM total: {vram_gb:.2f} GB (límite: 70%)")
 else:
     print("[CPU] No se detectó GPU, entrenando en CPU.")
 
@@ -109,6 +111,10 @@ def train_tacotron2(model, dataloader, val_dataloader, config, device=device):
             # Guardar checkpoint intermedio
             os.makedirs('checkpoints', exist_ok=True)
             torch.save(model.state_dict(), f'checkpoints/tacotron2_epoch_{epoch}.pt')
+
+        # Liberar caché VRAM cada 5 épocas
+        if device.type == 'cuda' and epoch % 5 == 0:
+            torch.cuda.empty_cache()
 
     # Liberar caché de VRAM al terminar
     if device.type == 'cuda':
