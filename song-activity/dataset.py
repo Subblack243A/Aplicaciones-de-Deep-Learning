@@ -1,6 +1,7 @@
 """
-LibriSpeechDataset: Descarga, carga y preprocesamiento del dataset LibriSpeech
-para entrenamiento del modelo ASR.
+LibriSpeechDataset: Downloads, loads, and preprocesses the LibriSpeech dataset
+for ASR model training.
+Implemented with PyTorch Dataset and DataLoader.
 """
 
 from __future__ import annotations
@@ -9,14 +10,15 @@ import tarfile
 import urllib.request
 import glob
 import numpy as np
-import tensorflow as tf
 import librosa
+
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
 
 from text_encoder import TextEncoder
 from audio_processor import AudioProcessor
 
-
-# URLs de descarga de LibriSpeech
 LIBRISPEECH_URLS = {
     "dev-clean": "https://www.openslr.org/resources/12/dev-clean.tar.gz",
     "test-clean": "https://www.openslr.org/resources/12/test-clean.tar.gz",
@@ -24,14 +26,10 @@ LIBRISPEECH_URLS = {
 }
 
 
-class LibriSpeechDataset:
+class LibriSpeechDataset(Dataset):
     """
-    Carga y preprocesa el dataset LibriSpeech para entrenamiento ASR.
-
-    El dataset se organiza en carpetas:
-    LibriSpeech/<split>/<speaker_id>/<chapter_id>/<utterance_id>.flac
-    Con archivos de transcripción:
-    LibriSpeech/<split>/<speaker_id>/<chapter_id>/<speaker_id>-<chapter_id>.trans.txt
+    Loads and preprocesses the LibriSpeech dataset for ASR training.
+    Inherits from torch.utils.data.Dataset for integration with DataLoader.
     """
 
     def __init__(
@@ -46,13 +44,13 @@ class LibriSpeechDataset:
     ):
         """
         Args:
-            root_dir: Directorio raíz donde se descarga/almacena el dataset.
-            split: Split del dataset (train-clean-100, dev-clean, test-clean).
-            sample_rate: Tasa de muestreo.
-            n_mels: Número de bandas mel.
-            max_audio_len: Longitud máxima de audio en time steps (None = sin límite).
-            max_label_len: Longitud máxima de etiquetas en caracteres (None = sin límite).
-            max_samples: Número máximo de muestras a cargar (None = todas).
+            root_dir: Root directory for the dataset.
+            split: Dataset split (train-clean-100, dev-clean, test-clean).
+            sample_rate: Audio sample rate.
+            n_mels: Number of mel bands.
+            max_audio_len: Maximum audio length in time steps.
+            max_label_len: Maximum label length in characters.
+            max_samples: Maximum number of samples to load.
         """
         self.root_dir = root_dir
         self.split = split
@@ -63,224 +61,166 @@ class LibriSpeechDataset:
         self.max_samples = max_samples
 
         self.encoder = TextEncoder()
-        self.processor = AudioProcessor(
-            sample_rate=sample_rate, n_mels=n_mels
-        )
-
-        self.samples = []  # Lista de (audio_path, transcript)
+        self.processor = AudioProcessor(sample_rate=sample_rate, n_mels=n_mels)
+        self.samples: list[tuple[str, str]] = []
+        self._processed: list[tuple[np.ndarray, list[int]]] = []
 
     def download(self) -> str:
         """
-        Descarga y extrae el split de LibriSpeech si no existe.
+        Downloads and extracts the LibriSpeech split if it doesn't exist.
 
         Returns:
-            Ruta al directorio del dataset extraído.
+            Path to the extracted dataset directory.
         """
-        dataset_dir = os.path.join(self.root_dir, "LibriSpeech", self.split)
-        if os.path.isdir(dataset_dir):
-            print(f"Dataset ya existe en '{dataset_dir}'")
-            return dataset_dir
-
         if self.split not in LIBRISPEECH_URLS:
-            raise ValueError(
-                f"Split '{self.split}' no soportado. "
-                f"Opciones: {list(LIBRISPEECH_URLS.keys())}"
-            )
+            raise ValueError(f"Split '{self.split}' not available. Options: {list(LIBRISPEECH_URLS.keys())}")
 
         os.makedirs(self.root_dir, exist_ok=True)
+        dataset_path = os.path.join(self.root_dir, "LibriSpeech", self.split)
+
+        if os.path.exists(dataset_path):
+            print(f"  Dataset '{self.split}' already exists at '{dataset_path}'")
+            return dataset_path
+
         url = LIBRISPEECH_URLS[self.split]
         tar_path = os.path.join(self.root_dir, f"{self.split}.tar.gz")
 
-        if not os.path.isfile(tar_path):
-            print(f"Descargando {self.split} desde {url}...")
-            print("Esto puede tardar varios minutos dependiendo de tu conexión.")
-            urllib.request.urlretrieve(url, tar_path, reporthook=self._download_progress)
-            print()  # Nueva línea después de la barra de progreso
+        print(f"  Downloading '{self.split}'... (this may take a while)")
+        urllib.request.urlretrieve(url, tar_path, reporthook=self._download_progress)
+        print()
 
-        print(f"Extrayendo {tar_path}...")
+        print(f"  Extracting '{tar_path}'...")
         with tarfile.open(tar_path, "r:gz") as tar:
-            tar.extractall(path=self.root_dir)
+            tar.extractall(self.root_dir)
 
-        # Limpiar archivo tar
-        os.remove(tar_path)
-        print(f"Dataset extraído en '{dataset_dir}'")
-        return dataset_dir
+        if os.path.isfile(tar_path):
+            os.remove(tar_path)
+
+        return dataset_path
 
     @staticmethod
-    def _download_progress(count, block_size, total_size):
-        """Callback para mostrar progreso de descarga."""
-        percent = count * block_size * 100 // total_size
-        print(f"\rProgreso: {percent}%", end="", flush=True)
+    def _download_progress(count, block_size, total_size) -> None:
+        """Callback to show download progress."""
+        pct = count * block_size * 100 // total_size
+        print(f"\r  Progress: {pct}%", end="", flush=True)
 
-    def load_samples(self) -> list[tuple[str, str]]:
+    def load_samples(self) -> None:
         """
-        Carga los pares (audio_path, transcript) desde el dataset.
-
-        Returns:
-            Lista de tuplas (audio_path, transcript).
+        Loads (audio_path, transcript) pairs from the dataset.
         """
-        dataset_dir = os.path.join(self.root_dir, "LibriSpeech", self.split)
-        if not os.path.isdir(dataset_dir):
-            raise FileNotFoundError(
-                f"Dataset no encontrado en '{dataset_dir}'. "
-                "Ejecuta download() primero."
-            )
+        dataset_path = os.path.join(self.root_dir, "LibriSpeech", self.split)
+        if not os.path.exists(dataset_path):
+            raise FileNotFoundError(f"Dataset not found at '{dataset_path}'. Run download() first.")
 
-        self.samples = []
-        # Buscar todos los archivos de transcripción
-        trans_files = glob.glob(
-            os.path.join(dataset_dir, "**", "*.trans.txt"), recursive=True
-        )
+        trans_files = glob.glob(os.path.join(dataset_path, "**", "*.trans.txt"), recursive=True)
+        all_samples = []
 
-        for trans_file in sorted(trans_files):
-            dir_path = os.path.dirname(trans_file)
-            with open(trans_file, "r", encoding="utf-8") as f:
+        for tf_path in trans_files:
+            base_dir = os.path.dirname(tf_path)
+            with open(tf_path, "r", encoding="utf-8") as f:
                 for line in f:
-                    line = line.strip()
-                    if not line:
+                    parts = line.strip().split(" ", 1)
+                    if len(parts) < 2:
                         continue
-                    # Formato: <utterance_id> <transcript>
-                    parts = line.split(" ", 1)
-                    if len(parts) != 2:
-                        continue
-                    utterance_id, transcript = parts
-                    audio_path = os.path.join(dir_path, f"{utterance_id}.flac")
-
+                    utt_id, transcript = parts
+                    audio_path = os.path.join(base_dir, f"{utt_id}.flac")
                     if os.path.isfile(audio_path):
-                        transcript = transcript.lower().strip()
-                        # Filtrar por longitud de etiqueta
-                        if self.max_label_len and len(transcript) > self.max_label_len:
-                            continue
-                        self.samples.append((audio_path, transcript))
+                        all_samples.append((audio_path, transcript.lower()))
 
-                    if self.max_samples and len(self.samples) >= self.max_samples:
-                        break
-            if self.max_samples and len(self.samples) >= self.max_samples:
-                break
+        if self.max_samples:
+            all_samples = all_samples[:self.max_samples]
 
-        print(f"Cargadas {len(self.samples)} muestras del split '{self.split}'")
-        return self.samples
+        self.samples = all_samples
+        print(f"  Loaded {len(self.samples)} samples from '{self.split}'")
+
+        # Pre-process all samples
+        self._processed = []
+        skipped = 0
+        for audio_path, transcript in self.samples:
+            result = self._process_sample(audio_path, transcript)
+            if result is not None:
+                self._processed.append(result)
+            else:
+                skipped += 1
+
+        print(f"  Processed {len(self._processed)} samples ({skipped} skipped)")
 
     def _process_sample(self, audio_path: str, transcript: str):
         """
-        Procesa una muestra: audio → espectrograma, texto → enteros.
+        Processes a single sample: audio → spectrogram, text → integers.
 
         Args:
-            audio_path: Ruta al archivo de audio.
-            transcript: Transcripción de texto.
+            audio_path: Path to the audio file.
+            transcript: Text transcription.
 
         Returns:
-            Tupla (spectrogram, label) o None si hay error.
+            Tuple (spectrogram, label) or None on error.
         """
         try:
             audio, sr = librosa.load(audio_path, sr=self.sample_rate)
-            mel = librosa.feature.melspectrogram(
-                y=audio, sr=sr,
-                n_fft=self.processor.n_fft,
-                hop_length=self.processor.hop_length,
-                n_mels=self.n_mels,
-                fmin=self.processor.fmin,
-                fmax=self.processor.fmax,
-            )
-            mel_db = librosa.power_to_db(mel, ref=np.max)
-            # Normalizar
-            mel_db = AudioProcessor.normalize(mel_db)
-            # Transponer: (n_mels, time) -> (time, n_mels)
-            mel_db = mel_db.T
-
-            # Truncar si es necesario
-            if self.max_audio_len and mel_db.shape[0] > self.max_audio_len:
-                mel_db = mel_db[:self.max_audio_len, :]
+            mel = self.processor.to_mel_spectrogram(audio)
+            mel_norm = AudioProcessor.normalize(mel)
+            mel_transposed = mel_norm.T  # (time, freq)
 
             label = self.encoder.encode(transcript)
-            return mel_db.astype(np.float32), np.array(label, dtype=np.int32)
-        except Exception as e:
-            print(f"Error procesando {audio_path}: {e}")
+
+            # Apply length filters
+            if self.max_audio_len and mel_transposed.shape[0] > self.max_audio_len:
+                return None
+            if self.max_label_len and len(label) > self.max_label_len:
+                return None
+            if len(label) == 0:
+                return None
+
+            return (mel_transposed, label)
+        except Exception:
             return None
 
-    def create_tf_dataset(self, batch_size: int = 16, shuffle: bool = True) -> tuple[tf.data.Dataset, int]:
+    def __len__(self) -> int:
+        return len(self._processed)
+
+    def __getitem__(self, idx: int):
+        mel, label = self._processed[idx]
+        return (
+            torch.from_numpy(mel).float(),
+            torch.tensor(label, dtype=torch.long),
+        )
+
+    @staticmethod
+    def collate_fn(batch):
         """
-        Crea un tf.data.Dataset con padding dinámico para entrenamiento.
-
-        Pre-procesa todos los audios a numpy arrays en memoria y luego crea
-        tensores puros de TensorFlow. Esto elimina tf.py_function y permite
-        que todo el pipeline de datos se ejecute en GPU.
-
-        Args:
-            batch_size: Tamaño de batch.
-            shuffle: Si se mezclan los datos.
+        Custom collate function for dynamic padding.
 
         Returns:
-            Tupla (dataset, num_batches).
+            Tuple (padded_specs, padded_labels, input_lengths, label_lengths).
         """
-        if not self.samples:
-            self.load_samples()
+        specs, labels = zip(*batch)
 
-        # === Pre-procesar todas las muestras a numpy arrays ===
-        print("Pre-procesando audio a espectrogramas (esto se hace una vez)...")
-        spectrograms = []
-        labels = []
-        input_lengths = []
-        label_lengths = []
-        errors = 0
+        input_lengths = torch.tensor([s.shape[0] for s in specs], dtype=torch.long)
+        label_lengths = torch.tensor([l.shape[0] for l in labels], dtype=torch.long)
 
-        for i, (audio_path, transcript) in enumerate(self.samples):
-            result = self._process_sample(audio_path, transcript)
-            if result is not None:
-                spec, lab = result
-                spectrograms.append(spec)
-                labels.append(lab)
-                input_lengths.append(spec.shape[0])
-                label_lengths.append(len(lab))
-            else:
-                errors += 1
+        padded_specs = pad_sequence(specs, batch_first=True, padding_value=0.0)
+        padded_labels = pad_sequence(labels, batch_first=True, padding_value=0)
 
-            if (i + 1) % 500 == 0:
-                print(f"  Procesadas {i + 1}/{len(self.samples)} muestras...")
+        return padded_specs, padded_labels, input_lengths, label_lengths
 
-        print(f"Pre-procesamiento completado: {len(spectrograms)} válidas, {errors} errores")
+    def create_dataloader(self, batch_size: int = 16, shuffle: bool = True, num_workers: int = 0) -> DataLoader:
+        """
+        Creates a DataLoader with dynamic padding.
 
-        if len(spectrograms) == 0:
-            raise ValueError("No se pudieron procesar muestras válidas.")
+        Args:
+            batch_size: Batch size.
+            shuffle: Whether to shuffle data.
+            num_workers: Number of worker processes.
 
-        # === Pad arrays a longitud máxima para crear tensores uniformes ===
-        max_spec_len = self.max_audio_len if self.max_audio_len else max(s.shape[0] for s in spectrograms)
-        max_lab_len = self.max_label_len if self.max_label_len else max(len(l) for l in labels)
-
-        # Crear arrays con padding
-        n_samples = len(spectrograms)
-        padded_specs = np.zeros((n_samples, max_spec_len, self.n_mels), dtype=np.float32)
-        padded_labels = np.full((n_samples, max_lab_len), self.encoder.BLANK_TOKEN, dtype=np.int32)
-        il_array = np.zeros((n_samples, 1), dtype=np.int32)
-        ll_array = np.zeros((n_samples, 1), dtype=np.int32)
-
-        for i in range(n_samples):
-            spec_len = min(spectrograms[i].shape[0], max_spec_len)
-            lab_len = min(len(labels[i]), max_lab_len)
-            padded_specs[i, :spec_len, :] = spectrograms[i][:spec_len, :]
-            padded_labels[i, :lab_len] = labels[i][:lab_len]
-            il_array[i, 0] = spec_len
-            ll_array[i, 0] = lab_len
-
-        # Liberar memoria de listas originales
-        del spectrograms, labels, input_lengths, label_lengths
-
-        print(f"Dataset shapes: specs={padded_specs.shape}, labels={padded_labels.shape}")
-        print(f"  Memoria estimada: {padded_specs.nbytes / 1e9:.2f} GB")
-
-        # === Crear tf.data.Dataset desde tensores (sin tf.py_function) ===
-        dataset = tf.data.Dataset.from_tensor_slices((
-            padded_specs,
-            padded_labels,
-            il_array,
-            ll_array,
-        ))
-
-        if shuffle:
-            dataset = dataset.shuffle(buffer_size=min(2000, n_samples))
-
-        dataset = dataset.batch(batch_size, drop_remainder=True)
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)
-
-        num_batches = n_samples // batch_size
-        return dataset, num_batches
+        Returns:
+            PyTorch DataLoader.
+        """
+        return DataLoader(
+            self,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            collate_fn=self.collate_fn,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+        )

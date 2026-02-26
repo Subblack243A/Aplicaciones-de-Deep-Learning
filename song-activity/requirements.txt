@@ -3,11 +3,23 @@ ffmpeg-python
 numpy
 librosa
 matplotlib
-tensorflow
+soundfile
+
+# Deep Learning Framework (PyTorch + CUDA)
+torch
+torchaudio
+tensorboard
+
+# ASR / Text Processing
 jiwer
-scipy==1.10.1
-soundfile==0.13.1
 
 # Translation
 argostranslate==1.9.6
+ctranslate2==4.4.0
 tqdm==4.66.1
+
+# Phonetic transcription
+eng-to-ipa
+
+# Audio Source Separation
+demucs

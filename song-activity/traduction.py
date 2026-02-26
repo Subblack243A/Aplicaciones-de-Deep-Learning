@@ -22,8 +22,6 @@ class TranslationService:
         self.from_code = from_code
         self.to_code = to_code
         self._ensure_package_installed()
-        
-        # Cache the translation model to avoid reloading it for every request
         self.translation_model = argostranslate.translate.get_translation_from_codes(from_code, to_code)
 
     def _ensure_package_installed(self):
@@ -95,30 +93,26 @@ class TranslationService:
             print("The input file is empty.")
             return
 
+        if len(lines) == 1 and len(lines[0].split()) > batch_size:
+            words = lines[0].split()
+            lines = [" ".join(words[i:i+batch_size]) + " " for i in range(0, len(words), batch_size)]
+
         print(f"Translating {len(lines)} lines (Batch size: {batch_size}, Workers: {max_workers})...")
         
-        # Prepare batches
         batches = []
         for i in range(0, len(lines), batch_size):
             batches.append(lines[i : i + batch_size])
-
-        # Helper function to process a batch
         def process_batch(batch):
             batch_text = "".join(batch)
             if batch_text.strip():
                 return self.translate_text(batch_text)
             else:
-                # Keep original formatting for empty lines/batches
                 return batch_text 
 
-        # Process batches in parallel
-        # We use thread pool as CTranslate2 (underlying argostranslate) releases GIL often
         translated_batches = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # executor.map maintains order of results matching order of inputs
             results = executor.map(process_batch, batches)
             
-            # Wrap in list and tqdm for progress bar
             translated_batches = list(tqdm(results, total=len(batches), desc="Processing Batches", unit="batch"))
 
         try:
@@ -132,7 +126,6 @@ class TranslationService:
 
 if __name__ == "__main__":
     
-    # Example usage
     INPUT_FILE = "Snuff - Slipknot Lyrics.txt"
     OUTPUT_FILE = f"{INPUT_FILE}_letra_espanol.txt"   
     

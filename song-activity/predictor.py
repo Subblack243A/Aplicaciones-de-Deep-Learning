@@ -1,21 +1,24 @@
 """
-Predictor: Carga un modelo ASR entrenado y transcribe archivos de audio/video.
-Soporta decodificación greedy y beam search.
+Predictor: Loads a trained ASR model and transcribes audio/video files.
+Supports greedy and beam search decoding.
+Implemented in PyTorch.
 """
 
 import os
 import numpy as np
-import tensorflow as tf
+import torch
 
 from text_encoder import TextEncoder
 from audio_processor import AudioProcessor
 from audio_converter import AudioConverter
+from audio_preprocessor import AudioPreprocessor
+from model import ASRModel
 
 
 class Predictor:
     """
-    Carga un modelo ASR entrenado y genera transcripciones
-    a partir de archivos de audio o video.
+    Loads a trained ASR model and generates transcriptions
+    from audio or video files.
     """
 
     def __init__(
@@ -23,88 +26,101 @@ class Predictor:
         model_path: str,
         encoder: TextEncoder = None,
         processor: AudioProcessor = None,
+        n_mels: int = 128,
+        rnn_units: int = 256,
     ):
         """
         Args:
-            model_path: Ruta al modelo guardado (.keras o directorio SavedModel).
-            encoder: Instancia de TextEncoder (default: se crea uno nuevo).
-            processor: Instancia de AudioProcessor (default: se crea uno nuevo).
+            model_path: Path to saved model weights (.pt).
+            encoder: TextEncoder instance (default: creates new one).
+            processor: AudioProcessor instance (default: creates new one).
+            n_mels: Number of mel bands (must match training config).
+            rnn_units: RNN units (must match training config).
         """
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.encoder = encoder or TextEncoder()
         self.processor = processor or AudioProcessor()
-        self.model = self._load_model(model_path)
+        self.preprocessor = AudioPreprocessor()
+        self.model = self._load_model(model_path, n_mels, rnn_units)
 
-    @staticmethod
-    def _load_model(model_path: str) -> tf.keras.Model:
-        """Carga el modelo desde disco."""
+    def _load_model(self, model_path: str, n_mels: int, rnn_units: int) -> ASRModel:
+        """Loads the model from disk."""
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Modelo no encontrado en '{model_path}'")
-        model = tf.keras.models.load_model(model_path)
-        print(f"Modelo cargado desde '{model_path}'")
+            raise FileNotFoundError(f"Model not found at '{model_path}'")
+
+        model = ASRModel(
+            n_mels=n_mels,
+            vocab_size=self.encoder.vocab_size,
+            rnn_units=rnn_units,
+        )
+        model.load_state_dict(torch.load(model_path, map_location=self.device))
+        model.to(self.device)
+        model.eval()
+        print(f"Model loaded from '{model_path}' on {self.device}")
         return model
 
+    @torch.no_grad()
     def transcribe_audio(self, audio_path: str, beam_width: int = None) -> str:
         """
-        Transcribe un archivo de audio.
+        Transcribes an audio file.
 
         Args:
-            audio_path: Ruta al archivo de audio (WAV, FLAC, etc.).
-            beam_width: Si se proporciona, usa beam search con este ancho.
-                       Si es None, usa decodificación greedy.
+            audio_path: Path to the audio file (WAV, FLAC, etc.).
+            beam_width: Beam search width (None = greedy decoding).
 
         Returns:
-            Texto transcrito.
+            Transcribed text.
         """
         if not os.path.isfile(audio_path):
-            raise FileNotFoundError(f"Archivo de audio no encontrado: '{audio_path}'")
+            raise FileNotFoundError(f"Audio file not found: '{audio_path}'")
 
-        # Procesar audio → espectrograma → preparar para modelo
+        # Process audio → spectrogram → prepare for model
         prepared = self.processor.process_audio_file(audio_path)
 
-        # Predicción
-        y_pred = self.model.predict(prepared, verbose=0)
+        # Convert to tensor
+        tensor_input = torch.from_numpy(prepared).float().to(self.device)
 
-        # Decodificar
+        # Inference
+        log_probs = self.model(tensor_input)
+
+        # Decode
         if beam_width:
-            return self.encoder.decode_beam(y_pred, beam_width)
-        response = self.encoder.decode_greedy(y_pred, audio_path)
-        return response
+            return self.encoder.decode_beam(log_probs, beam_width)
+        return self.encoder.decode_greedy(log_probs, os.path.abspath(audio_path))
 
     def transcribe_video(self, video_path: str, beam_width: int = None) -> str:
         """
-        Transcribe un archivo de video (convierte a WAV primero).
+        Transcribes a video file (converts to WAV first).
 
         Args:
-            video_path: Ruta al archivo de video.
-            beam_width: Ancho de beam search (None = greedy).
+            video_path: Path to the video file.
+            beam_width: Beam search width (None = greedy).
 
         Returns:
-            Texto transcrito.
+            Transcribed text.
         """
         if not os.path.isfile(video_path):
-            raise FileNotFoundError(f"Archivo de video no encontrado: '{video_path}'")
+            raise FileNotFoundError(f"Video file not found: '{video_path}'")
 
-        # Convertir video a WAV temporal
         wav_path = AudioConverter.any_to_wav(video_path)
+        vocals_path = self.preprocessor.extract_vocals(os.path.abspath(wav_path))
         try:
-            result = self.transcribe_audio(wav_path, beam_width)
-            return result
+            return self.transcribe_audio(vocals_path, beam_width)
         finally:
-            # Limpiar WAV temporal (solo si fue generado, no el original)
             ext = os.path.splitext(video_path)[1].lower()
             if ext != '.wav' and os.path.isfile(wav_path):
                 os.remove(wav_path)
 
     def transcribe(self, input_path: str, beam_width: int = None) -> str:
         """
-        Transcribe un archivo de audio o video (detecta automáticamente el tipo).
+        Transcribes an audio or video file (auto-detects type).
 
         Args:
-            input_path: Ruta al archivo.
-            beam_width: Ancho de beam search (None = greedy).
+            input_path: Path to the file.
+            beam_width: Beam search width (None = greedy).
 
         Returns:
-            Texto transcrito.
+            Transcribed text.
         """
         ext = os.path.splitext(input_path)[1].lower()
         video_exts = {'.mp4', '.avi', '.mkv', '.mov', '.webm'}
@@ -112,7 +128,6 @@ class Predictor:
         if ext in video_exts:
             return self.transcribe_video(input_path, beam_width)
         else:
-            # Convertir a WAV si no lo es
             wav_path = AudioConverter.any_to_wav(input_path)
             try:
                 return self.transcribe_audio(wav_path, beam_width)
@@ -120,23 +135,76 @@ class Predictor:
                 if ext != '.wav' and os.path.isfile(wav_path) and wav_path != input_path:
                     os.remove(wav_path)
 
+    @torch.no_grad()
+    def transcribe_full(self, input_path: str, beam_width: int = None) -> dict:
+        """
+        Transcribes an audio/video file and returns all intermediate artifacts.
 
+        Args:
+            input_path: Path to the audio or video file.
+            beam_width: Beam search width (None = greedy).
+
+        Returns:
+            Dict with keys: transcription, vocals_path, mel_spectrogram,
+            audio, sample_rate.
+        """
+        ext = os.path.splitext(input_path)[1].lower()
+        video_exts = {'.mp4', '.avi', '.mkv', '.mov', '.webm'}
+
+        # Step 1: Convert to WAV if needed
+        wav_path = AudioConverter.any_to_wav(input_path)
+
+        # Step 2: Extract vocals
+        vocals_path = self.preprocessor.extract_vocals(os.path.abspath(wav_path))
+
+        # Step 3: Load audio from vocals
+        audio, sr = self.processor.load_audio(vocals_path)
+
+        # Step 4: Generate mel spectrogram
+        mel_spectrogram = self.processor.to_mel_spectrogram(audio)
+
+        # Step 5: Prepare for model
+        prepared = self.processor.prepare_for_model(mel_spectrogram)
+        tensor_input = torch.from_numpy(prepared).float().to(self.device)
+
+        # Step 6: Predict
+        log_probs = self.model(tensor_input)
+
+        # Step 7: Decode
+        if beam_width:
+            transcription = self.encoder.decode_beam(log_probs, beam_width)
+        else:
+            transcription = self.encoder.decode_greedy(log_probs, os.path.abspath(vocals_path))
+
+        # Cleanup intermediate WAV
+        abs_wav = os.path.abspath(wav_path)
+        abs_vocals = os.path.abspath(vocals_path)
+        if ext in video_exts and abs_wav != abs_vocals and os.path.isfile(wav_path):
+            os.remove(wav_path)
+
+        return {
+            "transcription": transcription,
+            "vocals_path": vocals_path,
+            "mel_spectrogram": mel_spectrogram,
+            "audio": audio,
+            "sample_rate": sr,
+        }
 
     @staticmethod
     def calculate_wer(reference: str, hypothesis: str) -> float:
         """
-        Calcula la tasa de error de palabras (Word Error Rate).
+        Calculates Word Error Rate.
 
         Args:
-            reference: Texto de referencia.
-            hypothesis: Texto transcrito (hipótesis).
+            reference: Reference text.
+            hypothesis: Transcribed text (hypothesis).
 
         Returns:
-            WER como float (0.0 = perfecto, 1.0 = 100% error).
+            WER as float (0.0 = perfect, 1.0 = 100% error).
         """
         try:
             from jiwer import wer
             return wer(reference, hypothesis)
         except ImportError:
-            print("Instala 'jiwer' para calcular WER: pip install jiwer")
+            print("Install 'jiwer' to calculate WER: pip install jiwer")
             return None
