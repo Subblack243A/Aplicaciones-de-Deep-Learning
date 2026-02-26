@@ -1,9 +1,11 @@
 # Dataset
 LibriSpeech/
+dataset/
 
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 # macOS
 .DS_Store
