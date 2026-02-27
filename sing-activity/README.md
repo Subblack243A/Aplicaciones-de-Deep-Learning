@@ -98,7 +98,7 @@ python main.py --mode train --data_dir dataset --ckpt checkpoints/my_model.pt
 Para generar canto a partir de la letra:
 
 ```bash
-python main.py --mode infer --text "Bury all your secrets in my skin" --ckpt checkpoints/my_model.pt --output output.wav
+python main.py --mode infer --text_file letra.txt --output mi_cancion
 ```
 
 ## Cómo funciona
