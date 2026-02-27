@@ -53,11 +53,13 @@ def sing_from_text(input_source, model_path, output_path, is_file=False, config=
     # 3. Procesar línea por línea y acumular el audio
     todos_los_audios = []
     
+    # Obtener el sample_rate de forma segura (si no existe, usa 22050 por defecto)
+    sr = getattr(config, 'sample_rate', getattr(config, 'sampling_rate', 22050))
+    
     # Configurar un pequeño silencio entre frases (0.5 segundos)
     duracion_silencio = 0.5 
-    muestras_silencio = int(duracion_silencio * config.sample_rate)
+    muestras_silencio = int(duracion_silencio * sr)
     array_silencio = np.zeros(muestras_silencio, dtype=np.float32)
-
     for i, line in enumerate(lines):
         print(f"⏳ Sintetizando parte {i+1}/{len(lines)}: '{line}'")
         wav_segment = generar_audio_por_linea(line, model, config, device, processor)
@@ -70,8 +72,8 @@ def sing_from_text(input_source, model_path, output_path, is_file=False, config=
         cancion_completa = np.concatenate(todos_los_audios)
         
         try:
-            sf.write(output_path, cancion_completa, config.sample_rate)
-            duracion_total = len(cancion_completa) / config.sample_rate
+            sf.write(output_path, cancion_completa, sr)
+            duracion_total = len(cancion_completa) / sr
             print(f"🎉 ¡Éxito! Canción guardada en '{output_path}' (Duración: {duracion_total:.2f} segundos)")
         except Exception as e:
             print(f"❌ Error al guardar el audio: {e}")
