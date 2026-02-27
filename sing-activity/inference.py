@@ -11,8 +11,9 @@ from utils.audio_utils import AudioProcessor
 def generar_audio_por_linea(texto, model, config, device, processor):
     """Genera el array numpy de audio para una sola línea de texto."""
     sequence = text_to_sequence(texto)
-    # Dependiendo de tu text_to_sequence, puede que necesites .unsqueeze(0) para simular el batch_size
-    text_tensor = torch.LongTensor(sequence).unsqueeze(0).to(device)
+    
+    # ❌ Le quitamos el .unsqueeze(0) que estaba causando el problema de la 4ta dimensión
+    text_tensor = torch.LongTensor(sequence).to(device)
     
     with torch.no_grad():
         mel_output, alignments = model.inference(text_tensor)
