@@ -23,6 +23,27 @@ import torch.nn as nn
 import torchvision.models as models
 import easyocr
 import os
+import sys
+from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
+
+# --- SOPORTE UTF-8 PARA CONSOLA WINDOWS ---
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+# ------------------------------------------
+
+# --- PARCHE PARA EASYOCR (Pillow 10+) ---
+# EasyOCR usa Image.ANTIALIAS el cual fue eliminado en Pillow 10.
+if not hasattr(Image, 'ANTIALIAS'):
+    Image.ANTIALIAS = Image.LANCZOS
+# ----------------------------------------
+
+# Carpeta donde se guardarán los resultados automáticamente
+SAVE_DIR = "capturas"
+if not os.path.exists(SAVE_DIR):
+    os.makedirs(SAVE_DIR)
 
 
 # =====================================================
@@ -56,7 +77,8 @@ COLORES = [
 ]
 
 TOOLBAR_HEIGHT = 70       # Altura de la barra de botones de color
-BORRAR_BTN_WIDTH = 120    # Ancho del botón "Borrar"
+BORRAR_BTN_WIDTH = 100    # Ancho del botón "Borrar"
+GUARDAR_BTN_WIDTH = 110   # Ancho del botón "Guardar"
 
 
 class KinectApp:
@@ -82,8 +104,13 @@ class KinectApp:
             self.reader = easyocr.Reader(['es', 'en'], gpu=use_gpu)
             print("Modelo OCR cargado exitosamente.")
         except Exception as e:
-            print(f"Error al cargar OCR: {e}")
-            self.reader = None
+            # Reintento con CPU si falla la GPU por memoria
+            try:
+                self.reader = easyocr.Reader(['es', 'en'], gpu=False)
+                print("Modelo OCR cargado en CPU (Fallback).")
+            except:
+                print(f"Error al cargar OCR: {e}")
+                self.reader = None
 
         # --- Cargar arquitectura de gestos ---
         print("Instanciando arquitectura MobileNetV2 (PyTorch)...")
@@ -127,7 +154,7 @@ class KinectApp:
         tk.Label(self.root, text="Toca los botones de color en la cámara\ncon tu dedo índice para cambiar",
                  bg="#1e1e2e", fg="#585b70", font=("Helvetica", 9)).pack()
 
-        # Slider grosor
+        # El Slider de grosor se mantiene como control secundario
         tk.Label(self.root, text="Grosor del trazo:",
                  bg="#1e1e2e", fg="#cdd6f4", font=("Helvetica", 10)).pack(pady=(15, 0))
         self.scale_size = tk.Scale(self.root, from_=2, to=15, orient=tk.HORIZONTAL,
@@ -135,15 +162,7 @@ class KinectApp:
                                     bg="#313244", fg="white", troughcolor="#45475a",
                                     highlightthickness=0, length=250)
         self.scale_size.set(self.brush_size)
-        self.scale_size.pack()
-
-        # Botón Guardar PNG
-        tk.Button(self.root, text="Guardar Dibujo como PNG",
-                  command=self._save_png, bg="#a6e3a1", fg="#1e1e2e", **btn_style).pack(pady=(15, 5))
-
-        # Botón Guardar TXT (OCR)
-        tk.Button(self.root, text="Extraer Texto -> TXT (OCR PyTorch)",
-                  command=self._save_txt, bg="#89b4fa", fg="#1e1e2e", **btn_style).pack(pady=5)
+        self.scale_size.pack(pady=10)
 
         # Instrucciones
         instrucciones = (
@@ -151,7 +170,8 @@ class KinectApp:
             "Dedo indice arriba -> Escribir\n"
             "Puno cerrado -> Dejar de escribir\n"
             "Toca un color en la camara\n"
-            "Toca 'Borrar' en la camara\n"
+            "Toca 'Guardar' para exportar\n"
+            "Toca 'Borrar' para limpiar\n"
             "Q -> Salir"
         )
         tk.Label(self.root, text=instrucciones, bg="#1e1e2e", fg="#7f849c",
@@ -170,14 +190,16 @@ class KinectApp:
     # =========================================================
     #  GUARDAR PNG
     # =========================================================
-    def _save_png(self):
+    def _save_png(self, path=None):
         if self.drawing_canvas is None:
-            messagebox.showwarning("Aviso", "No hay nada dibujado aún.")
+            if path is None: messagebox.showwarning("Aviso", "No hay nada dibujado aún.")
             return
-        path = filedialog.asksaveasfilename(defaultextension=".png",
-                                             filetypes=[("PNG", "*.png")])
+
+        if not path:
+            path = filedialog.asksaveasfilename(defaultextension=".png",
+                                                 filetypes=[("PNG", "*.png")])
         if path:
-            # Guardar el canvas con fondo blanco para mejor visibilidad
+            # Guardar el canvas con fondo blanco
             white_bg = np.ones_like(self.drawing_canvas) * 255
             mask = cv2.cvtColor(self.drawing_canvas, cv2.COLOR_BGR2GRAY)
             _, mask = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
@@ -186,24 +208,27 @@ class KinectApp:
             fg = cv2.bitwise_and(self.drawing_canvas, self.drawing_canvas, mask=mask)
             result = cv2.add(bg, fg)
             cv2.imwrite(path, result)
-            messagebox.showinfo("Éxito", "Imagen guardada exitosamente.")
+            if not path.startswith(SAVE_DIR): # Solo mostrar si no es auto-guardado
+                messagebox.showinfo("Éxito", f"Imagen guardada en:\n{path}")
+            else:
+                print(f"Imagen guardada: {path}")
 
     # =========================================================
     #  GUARDAR TXT (OCR con EasyOCR + PyTorch)
     # =========================================================
-    def _save_txt(self):
+    def _save_txt(self, path=None):
         if not self.reader:
-            messagebox.showerror("Error", "El modelo OCR (PyTorch) no está disponible.")
+            if path is None: messagebox.showerror("Error", "El modelo OCR (PyTorch) no está disponible.")
             return
         if self.drawing_canvas is None:
-            messagebox.showwarning("Aviso", "No hay nada dibujado aún.")
+            if path is None: messagebox.showwarning("Aviso", "No hay nada dibujado aún.")
             return
 
-        path = filedialog.asksaveasfilename(defaultextension=".txt",
-                                             filetypes=[("Texto", "*.txt")])
+        if not path:
+            path = filedialog.asksaveasfilename(defaultextension=".txt",
+                                                 filetypes=[("Texto", "*.txt")])
         if path:
             print("Extrayendo texto con EasyOCR (red neuronal PyTorch)...")
-            # Crear imagen con fondo blanco para mejor reconocimiento OCR
             white_bg = np.ones_like(self.drawing_canvas) * 255
             mask = cv2.cvtColor(self.drawing_canvas, cv2.COLOR_BGR2GRAY)
             _, mask = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
@@ -215,11 +240,15 @@ class KinectApp:
             resultados = self.reader.readtext(ocr_img)
             texto = "\n".join([r[1] for r in resultados])
 
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8-sig") as f:
                 f.write(texto)
 
-            messagebox.showinfo("Texto Extraído",
-                                f"Texto capturado:\n\n{texto if texto else '(No se detectó texto)'}")
+            if not path.startswith(SAVE_DIR):
+                messagebox.showinfo("Texto Extraído",
+                                    f"Texto capturado:\n\n{texto if texto else '(No se detectó texto)'}")
+            else:
+                print(f"Texto guardado en: {path}")
+                return texto
 
     # =========================================================
     #  DETECCIÓN DE GESTOS DE LA MANO
@@ -300,8 +329,8 @@ class KinectApp:
             self.color_buttons.append((x1, y1, x2, y2, i))
 
         # --- Botón Borrar ---
-        bx1 = w - BORRAR_BTN_WIDTH - 20
-        bx2 = w - 20
+        bx1 = w - BORRAR_BTN_WIDTH - GUARDAR_BTN_WIDTH - 40
+        bx2 = bx1 + BORRAR_BTN_WIDTH
         by1, by2 = y_top, y_top + btn_h
         cv2.rectangle(img, (bx1, by1), (bx2, by2), (60, 60, 60), -1)
         cv2.rectangle(img, (bx1, by1), (bx2, by2), (100, 100, 255), 2)
@@ -311,6 +340,17 @@ class KinectApp:
         cv2.putText(img, "Borrar", (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
                     0.55, (100, 100, 255), 2, cv2.LINE_AA)
         self.borrar_button = (bx1, by1, bx2, by2)
+
+        # --- Botón Guardar ---
+        gx1 = w - GUARDAR_BTN_WIDTH - 20
+        gx2 = w - 20
+        cv2.rectangle(img, (gx1, by1), (gx2, by2), (40, 80, 40), -1)
+        cv2.rectangle(img, (gx1, by1), (gx2, by2), (100, 255, 100), 2)
+        ts = cv2.getTextSize("Guardar", cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)[0]
+        tx = gx1 + (GUARDAR_BTN_WIDTH - ts[0]) // 2
+        cv2.putText(img, "Guardar", (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55, (100, 255, 100), 2, cv2.LINE_AA)
+        self.guardar_button = (gx1, by1, gx2, by2)
 
     def _check_toolbar_touch(self, x, y):
         """Verifica si el dedo índice toca un botón del toolbar."""
@@ -333,7 +373,43 @@ class KinectApp:
                     self.drawing_canvas[:] = 0
                 return True
 
+        # Verificar botón guardar
+        if hasattr(self, 'guardar_button') and self.guardar_button:
+            gx1, gy1, gx2, gy2 = self.guardar_button
+            if gx1 <= x <= gx2 and gy1 <= y <= gy2:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Auto-guardar PNG y TXT
+                self._save_png(os.path.join(SAVE_DIR, f"dibujo_{timestamp}.png"))
+                self._save_txt(os.path.join(SAVE_DIR, f"texto_{timestamp}.txt"))
+                # Limpiar tras guardar (opcional, pero util para seguir escribiendo)
+                # self.drawing_canvas[:] = 0 
+                return True
+
         return False
+
+    def _draw_text_utf8(self, img, text, position, font_size, color_bgr):
+        """Dibuja texto con soporte UTF-8 (como la 'ñ') usando Pillow."""
+        # Convertir OpenCV (BGR) a Pillow (RGB)
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb)
+        draw = ImageDraw.Draw(pil_img)
+        
+        # Intentar cargar una fuente del sistema que soporte UTF-8
+        try:
+            # En Windows suele estar en esta ruta
+            font_path = "C:/Windows/Fonts/arial.ttf"
+            if not os.path.exists(font_path):
+                font_path = "arial.ttf" # Intentar en el path local
+            font = ImageFont.truetype(font_path, font_size)
+        except:
+            font = ImageFont.load_default()
+            
+        # Dibujar el texto (Pillow usa RGB, invertimos el BGR recibido)
+        color_rgb = (color_bgr[2], color_bgr[1], color_bgr[0])
+        draw.text(position, text, font=font, fill=color_rgb)
+        
+        # Convertir de vuelta a OpenCV (BGR)
+        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     # =========================================================
     #  BUCLE PRINCIPAL DE LA CÁMARA
@@ -449,8 +525,8 @@ class KinectApp:
                 if not success:
                     continue
 
-            # Espejo horizontal
-            frame = cv2.flip(frame, 1)
+            # Imagen natural (sin espejo)
+            # frame = cv2.flip(frame, 1) # Comentado para evitar inversion
             h, w = frame.shape[:2]
 
             # Inicializar canvas de dibujo (negro/transparente)
@@ -524,12 +600,11 @@ class KinectApp:
 
             self._dibujar_toolbar(combined)
 
-            cv2.putText(combined, status_text, (15, h - 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2, cv2.LINE_AA)
+            # Usar el nuevo método para soportar la 'ñ'
+            combined = self._draw_text_utf8(combined, status_text, (15, h - 40), 24, status_color)
 
             color_name = COLORES[self.color_index][0]
-            cv2.putText(combined, f"Color: {color_name}", (w - 160, h - 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.brush_color_bgr, 2, cv2.LINE_AA)
+            combined = self._draw_text_utf8(combined, f"Color: {color_name}", (w - 180, h - 40), 18, self.brush_color_bgr)
 
             # Fuente de video
             src_text = "Kinect SDK" if use_kinect_sdk else "Webcam"

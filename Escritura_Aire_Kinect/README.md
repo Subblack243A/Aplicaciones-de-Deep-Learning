@@ -8,7 +8,7 @@ El mayor desafío técnico de este proyecto fue la obsolescencia del hardware. E
 
 Para solucionar esto, se desarrolló un port nativo (Wrapper) a medida para Python 3.10. Se identificó que el SDK utiliza la librería Kinect10.dll, por lo que se reconstruyeron los módulos structs.py y \_interop.py utilizando la librería ctypes para mapear las tablas virtuales (vtable) de la interfaz COM del Kinect directamente a la versión actual de Python. Se implementó un sistema de multithreading para capturar el buffer de video BGRA del Kinect y sincronizarlo con el ciclo de procesamiento sin latencia. Esto elimina la necesidad de usar herramientas externas como OBS o cámaras virtuales, logrando una conexión directa y eficiente.
 
-## Stack Tecnológico
+## Librerias utilizadas
 
 MediaPipe fue utilizado para el seguimiento de los 21 puntos de referencia de la mano y detección de gestos. La librería permite obtener coordenadas precisas en tiempo real para el control del puntero.
 
