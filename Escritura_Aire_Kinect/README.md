@@ -2,7 +2,7 @@
 
 Este proyecto es una aplicación de visión artificial y Deep Learning que permite escribir en el aire utilizando un sensor Kinect modelo 1414. Combina el rastreo de articulaciones de la mano, reconocimiento de gestos y digitalización de texto (OCR).
 
-## El Desafío Técnico: Porting del Wrapper
+## Uso de Wrappers para poder usar bien el Kinect
 
 El mayor desafío técnico de este proyecto fue la obsolescencia del hardware. El Kinect v1 depende del Kinect for Windows SDK v1.8, el cual solo cuenta con soporte oficial para Python 2.7.
 
