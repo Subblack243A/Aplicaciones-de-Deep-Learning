@@ -1,0 +1,14 @@
+name: song-activity-gpu
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - tensorflow-cpu==2.10
+    - tensorflow-directml-plugin
+    - ffmpeg-python
+    - numpy<2
+    - librosa
+    - matplotlib
+    - jiwer
