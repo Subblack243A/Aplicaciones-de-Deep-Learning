@@ -1,0 +1,562 @@
+"""
+=================================================================
+  Kinect App v2 - Escritura en el Aire con Kinect Xbox 360
+  ---------------------------------------------------------
+  - Usa MediaPipe para detectar la mano
+  - Dibuja sobre la imagen de la cámara (te ves a ti mismo)
+  - 3 colores seleccionables con el dedo índice
+  - Guarda a .TXT usando EasyOCR (red neuronal PyTorch)
+  - Compatible con Kinect v1 (freenect) o cámara web
+=================================================================
+"""
+
+import cv2
+import mediapipe as mp
+import numpy as np
+import ctypes
+import math
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import threading
+import torch
+import torch.nn as nn
+import torchvision.models as models
+import easyocr
+import os
+
+
+# =====================================================
+# Red Neuronal para Reconocimiento de Gestos (PyTorch)
+# =====================================================
+class GestureRecognitionModel(nn.Module):
+    """
+    Arquitectura basada en MobileNetV2 (Transfer Learning).
+    """
+    def __init__(self, num_classes=2):
+        super(GestureRecognitionModel, self).__init__()
+        weights = models.MobileNet_V2_Weights.DEFAULT
+        self.base_model = models.mobilenet_v2(weights=weights)
+        for param in self.base_model.parameters():
+            param.requires_grad = False
+        in_features = self.base_model.classifier[1].in_features
+        self.base_model.classifier[1] = nn.Linear(in_features, num_classes)
+
+    def forward(self, x):
+        return self.base_model(x)
+
+
+# =====================================================
+# Configuración de colores y toolbar
+# =====================================================
+# (nombre, color_BGR para OpenCV, color_RGB para referencia)
+COLORES = [
+    ("Rojo",   (0, 0, 255)),
+    ("Verde",  (0, 255, 0)),
+    ("Azul",   (255, 0, 0)),
+]
+
+TOOLBAR_HEIGHT = 70       # Altura de la barra de botones de color
+BORRAR_BTN_WIDTH = 120    # Ancho del botón "Borrar"
+
+
+class KinectApp:
+    def __init__(self):
+        self.running = True
+
+        # --- Estado del dibujo ---
+        self.drawing_canvas = None        # Canvas transparente (negro) para dibujar
+        self.brush_color_bgr = COLORES[0][1]  # Rojo por defecto
+        self.color_index = 0
+        self.brush_size = 5
+        self.prev_x, self.prev_y = None, None
+        self.is_drawing = False
+
+        # --- Posiciones de botones (se calculan en _dibujar_toolbar) ---
+        self.color_buttons = []
+        self.borrar_button = None
+
+        # --- Cargar OCR (EasyOCR + PyTorch) ---
+        try:
+            print("Cargando modelo OCR (EasyOCR + PyTorch)...")
+            use_gpu = torch.cuda.is_available()
+            self.reader = easyocr.Reader(['es', 'en'], gpu=use_gpu)
+            print("Modelo OCR cargado exitosamente.")
+        except Exception as e:
+            print(f"Error al cargar OCR: {e}")
+            self.reader = None
+
+        # --- Cargar arquitectura de gestos ---
+        print("Instanciando arquitectura MobileNetV2 (PyTorch)...")
+        self.modelo_gestos = GestureRecognitionModel(num_classes=2)
+        print("Arquitectura cargada.\n")
+
+        # --- Iniciar hilo de cámara ---
+        self.cam_thread = threading.Thread(target=self.camera_loop, daemon=True)
+        self.cam_thread.start()
+
+        # --- Panel de Control (Tkinter) ---
+        self._crear_panel_control()
+
+    # =========================================================
+    #  PANEL DE CONTROL (Tkinter)
+    # =========================================================
+    def _crear_panel_control(self):
+        self.root = tk.Tk()
+        self.root.title("Panel Control - Escritura en el Aire")
+        self.root.geometry("340x420")
+        self.root.configure(bg="#1e1e2e")
+        self.root.resizable(False, False)
+
+        btn_style = {"width": 30, "font": ("Helvetica", 10, "bold"),
+                     "relief": "flat", "cursor": "hand2", "pady": 4}
+
+        # Título
+        tk.Label(self.root, text="Escritura en el Aire",
+                 font=("Helvetica", 15, "bold"), bg="#1e1e2e", fg="#89b4fa").pack(pady=12)
+
+        # Info
+        tk.Label(self.root, text="Controla todo con tu mano en la cámara",
+                 bg="#1e1e2e", fg="#a6adc8", font=("Helvetica", 9)).pack()
+
+        # Color actual
+        self.lbl_color = tk.Label(self.root,
+                                   text=f"Color actual: {COLORES[0][0]}",
+                                   bg="#1e1e2e", fg="white", font=("Helvetica", 11, "bold"))
+        self.lbl_color.pack(pady=(15, 5))
+
+        tk.Label(self.root, text="Toca los botones de color en la cámara\ncon tu dedo índice para cambiar",
+                 bg="#1e1e2e", fg="#585b70", font=("Helvetica", 9)).pack()
+
+        # Slider grosor
+        tk.Label(self.root, text="Grosor del trazo:",
+                 bg="#1e1e2e", fg="#cdd6f4", font=("Helvetica", 10)).pack(pady=(15, 0))
+        self.scale_size = tk.Scale(self.root, from_=2, to=15, orient=tk.HORIZONTAL,
+                                    command=self._update_size,
+                                    bg="#313244", fg="white", troughcolor="#45475a",
+                                    highlightthickness=0, length=250)
+        self.scale_size.set(self.brush_size)
+        self.scale_size.pack()
+
+        # Botón Guardar PNG
+        tk.Button(self.root, text="Guardar Dibujo como PNG",
+                  command=self._save_png, bg="#a6e3a1", fg="#1e1e2e", **btn_style).pack(pady=(15, 5))
+
+        # Botón Guardar TXT (OCR)
+        tk.Button(self.root, text="Extraer Texto -> TXT (OCR PyTorch)",
+                  command=self._save_txt, bg="#89b4fa", fg="#1e1e2e", **btn_style).pack(pady=5)
+
+        # Instrucciones
+        instrucciones = (
+            "------- Gestos -------\n"
+            "Dedo indice arriba -> Escribir\n"
+            "Puno cerrado -> Dejar de escribir\n"
+            "Toca un color en la camara\n"
+            "Toca 'Borrar' en la camara\n"
+            "Q -> Salir"
+        )
+        tk.Label(self.root, text=instrucciones, bg="#1e1e2e", fg="#7f849c",
+                 font=("Consolas", 9), justify="left").pack(pady=(15, 5))
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.mainloop()
+
+    def _update_size(self, val):
+        self.brush_size = int(val)
+
+    def _on_close(self):
+        self.running = False
+        self.root.destroy()
+
+    # =========================================================
+    #  GUARDAR PNG
+    # =========================================================
+    def _save_png(self):
+        if self.drawing_canvas is None:
+            messagebox.showwarning("Aviso", "No hay nada dibujado aún.")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".png",
+                                             filetypes=[("PNG", "*.png")])
+        if path:
+            # Guardar el canvas con fondo blanco para mejor visibilidad
+            white_bg = np.ones_like(self.drawing_canvas) * 255
+            mask = cv2.cvtColor(self.drawing_canvas, cv2.COLOR_BGR2GRAY)
+            _, mask = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
+            mask_inv = cv2.bitwise_not(mask)
+            bg = cv2.bitwise_and(white_bg, white_bg, mask=mask_inv)
+            fg = cv2.bitwise_and(self.drawing_canvas, self.drawing_canvas, mask=mask)
+            result = cv2.add(bg, fg)
+            cv2.imwrite(path, result)
+            messagebox.showinfo("Éxito", "Imagen guardada exitosamente.")
+
+    # =========================================================
+    #  GUARDAR TXT (OCR con EasyOCR + PyTorch)
+    # =========================================================
+    def _save_txt(self):
+        if not self.reader:
+            messagebox.showerror("Error", "El modelo OCR (PyTorch) no está disponible.")
+            return
+        if self.drawing_canvas is None:
+            messagebox.showwarning("Aviso", "No hay nada dibujado aún.")
+            return
+
+        path = filedialog.asksaveasfilename(defaultextension=".txt",
+                                             filetypes=[("Texto", "*.txt")])
+        if path:
+            print("Extrayendo texto con EasyOCR (red neuronal PyTorch)...")
+            # Crear imagen con fondo blanco para mejor reconocimiento OCR
+            white_bg = np.ones_like(self.drawing_canvas) * 255
+            mask = cv2.cvtColor(self.drawing_canvas, cv2.COLOR_BGR2GRAY)
+            _, mask = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
+            mask_inv = cv2.bitwise_not(mask)
+            bg = cv2.bitwise_and(white_bg, white_bg, mask=mask_inv)
+            fg = cv2.bitwise_and(self.drawing_canvas, self.drawing_canvas, mask=mask)
+            ocr_img = cv2.add(bg, fg)
+
+            resultados = self.reader.readtext(ocr_img)
+            texto = "\n".join([r[1] for r in resultados])
+
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(texto)
+
+            messagebox.showinfo("Texto Extraído",
+                                f"Texto capturado:\n\n{texto if texto else '(No se detectó texto)'}")
+
+    # =========================================================
+    #  DETECCIÓN DE GESTOS DE LA MANO
+    # =========================================================
+    def _is_index_up(self, hand_landmarks):
+        """Retorna True si SOLO el dedo índice está levantado (para escribir)."""
+        lm = hand_landmarks.landmark
+        # El índice está arriba si la punta está más arriba que la segunda falange
+        index_up = lm[mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP].y < \
+                   lm[mp.solutions.hands.HandLandmark.INDEX_FINGER_DIP].y
+
+        # Verificar que los demás dedos están abajo (para evitar falsos positivos)
+        middle_down = lm[mp.solutions.hands.HandLandmark.MIDDLE_FINGER_TIP].y > \
+                      lm[mp.solutions.hands.HandLandmark.MIDDLE_FINGER_PIP].y
+        ring_down = lm[mp.solutions.hands.HandLandmark.RING_FINGER_TIP].y > \
+                    lm[mp.solutions.hands.HandLandmark.RING_FINGER_PIP].y
+
+        return index_up and middle_down and ring_down
+
+    def _is_fist(self, hand_landmarks):
+        """Retorna True si el puño está cerrado (para dejar de dibujar)."""
+        lm = hand_landmarks.landmark
+        checks = [
+            lm[mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP].y >
+            lm[mp.solutions.hands.HandLandmark.INDEX_FINGER_PIP].y,
+            lm[mp.solutions.hands.HandLandmark.MIDDLE_FINGER_TIP].y >
+            lm[mp.solutions.hands.HandLandmark.MIDDLE_FINGER_PIP].y,
+            lm[mp.solutions.hands.HandLandmark.RING_FINGER_TIP].y >
+            lm[mp.solutions.hands.HandLandmark.RING_FINGER_PIP].y,
+            lm[mp.solutions.hands.HandLandmark.PINKY_TIP].y >
+            lm[mp.solutions.hands.HandLandmark.PINKY_PIP].y,
+        ]
+        return all(checks)
+
+    # =========================================================
+    #  TOOLBAR: Botones de colores en la imagen de la cámara
+    # =========================================================
+    def _dibujar_toolbar(self, img):
+        """Dibuja la barra de colores + botón borrar en la parte superior de la cámara."""
+        h, w = img.shape[:2]
+
+        # Fondo semitransparente
+        overlay = img.copy()
+        cv2.rectangle(overlay, (0, 0), (w, TOOLBAR_HEIGHT), (30, 30, 30), -1)
+        cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
+
+        # --- Botones de colores ---
+        num = len(COLORES)
+        btn_w, btn_h = 100, 45
+        spacing = 15
+        total = num * btn_w + (num - 1) * spacing
+        start_x = 20
+        y_top = (TOOLBAR_HEIGHT - btn_h) // 2
+
+        self.color_buttons = []
+        for i, (nombre, color_bgr) in enumerate(COLORES):
+            x1 = start_x + i * (btn_w + spacing)
+            x2 = x1 + btn_w
+            y1, y2 = y_top, y_top + btn_h
+
+            # Botón relleno
+            cv2.rectangle(img, (x1, y1), (x2, y2), color_bgr, -1)
+
+            # Borde de selección
+            if i == self.color_index:
+                cv2.rectangle(img, (x1 - 3, y1 - 3), (x2 + 3, y2 + 3), (255, 255, 255), 3)
+                cv2.rectangle(img, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), color_bgr, 2)
+            else:
+                cv2.rectangle(img, (x1, y1), (x2, y2), (180, 180, 180), 1)
+
+            # Texto
+            ts = cv2.getTextSize(nombre, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)[0]
+            tx = x1 + (btn_w - ts[0]) // 2
+            ty = y1 + (btn_h + ts[1]) // 2
+            cv2.putText(img, nombre, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55, (255, 255, 255), 2, cv2.LINE_AA)
+
+            self.color_buttons.append((x1, y1, x2, y2, i))
+
+        # --- Botón Borrar ---
+        bx1 = w - BORRAR_BTN_WIDTH - 20
+        bx2 = w - 20
+        by1, by2 = y_top, y_top + btn_h
+        cv2.rectangle(img, (bx1, by1), (bx2, by2), (60, 60, 60), -1)
+        cv2.rectangle(img, (bx1, by1), (bx2, by2), (100, 100, 255), 2)
+        ts = cv2.getTextSize("Borrar", cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)[0]
+        tx = bx1 + (BORRAR_BTN_WIDTH - ts[0]) // 2
+        ty = by1 + (btn_h + ts[1]) // 2
+        cv2.putText(img, "Borrar", (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55, (100, 100, 255), 2, cv2.LINE_AA)
+        self.borrar_button = (bx1, by1, bx2, by2)
+
+    def _check_toolbar_touch(self, x, y):
+        """Verifica si el dedo índice toca un botón del toolbar."""
+        # Verificar botones de color
+        for (x1, y1, x2, y2, idx) in self.color_buttons:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                self.color_index = idx
+                self.brush_color_bgr = COLORES[idx][1]
+                try:
+                    self.lbl_color.config(text=f"Color actual: {COLORES[idx][0]}")
+                except:
+                    pass
+                return True
+
+        # Verificar botón borrar
+        if self.borrar_button:
+            bx1, by1, bx2, by2 = self.borrar_button
+            if bx1 <= x <= bx2 and by1 <= y <= by2:
+                if self.drawing_canvas is not None:
+                    self.drawing_canvas[:] = 0
+                return True
+
+        return False
+
+    # =========================================================
+    #  BUCLE PRINCIPAL DE LA CÁMARA
+    # =========================================================
+    def camera_loop(self):
+        """Hilo principal: captura video del Kinect v1 (Xbox 360), detecta mano, dibuja sobre la imagen."""
+
+        CAPTURE_W, CAPTURE_H = 640, 480
+        use_kinect_sdk = False
+        cap = None
+
+        # --- Intentar conexión nativa con Kinect SDK v1.8 ---
+        try:
+            from pykinect_v1 import nui
+
+            # Verificar si hay sensores conectados
+            sensor_count = nui.Device().count
+            print(f"Sensores Kinect detectados: {sensor_count}")
+
+            if sensor_count > 0:
+                # Variables de sincronización para el frame del Kinect
+                self._kinect_frame_lock = threading.Lock()
+                self._kinect_buffer = (ctypes.c_byte * (CAPTURE_W * CAPTURE_H * 4))()
+                self._kinect_new_frame = False
+
+                # Callback: se ejecuta cuando el Kinect tiene un frame nuevo
+                def _on_video_frame(frame):
+                    try:
+                        frame.image.copy_bits(self._kinect_buffer)
+                        with self._kinect_frame_lock:
+                            self._kinect_new_frame = True
+                    except Exception:
+                        pass
+
+                # Inicializar Kinect con solo la cámara de color
+                self._kinect_runtime = nui.Runtime(
+                    nui_init_flags=nui.RuntimeOptions.uses_color
+                )
+
+                # Abrir stream de video a 640x480
+                self._kinect_runtime.video_stream.open(
+                    nui.ImageStreamType.Video, 2,
+                    nui.ImageResolution.Resolution640x480,
+                    nui.ImageType.Color
+                )
+
+                # Registrar callback
+                self._kinect_runtime.video_frame_ready += _on_video_frame
+
+                use_kinect_sdk = True
+                print("Kinect v1 (Xbox 360) conectado exitosamente via SDK nativo.")
+            else:
+                print("AVISO: El Kinect SDK no detecta sensores conectados.")
+
+        except Exception as e:
+            print(f"AVISO: No se pudo iniciar Kinect SDK: {e}")
+
+        # --- Fallback: cámara web genérica ---
+        if not use_kinect_sdk:
+            print("Buscando cámara web como alternativa...")
+            for cam_idx in [0, 1, 2]:
+                test_cap = cv2.VideoCapture(cam_idx)
+                if test_cap.isOpened():
+                    ret, _ = test_cap.read()
+                    if ret:
+                        cap = test_cap
+                        print(f"Camara web encontrada en indice {cam_idx}")
+                        break
+                    test_cap.release()
+
+            if cap is None:
+                print("ERROR: No se encontro ninguna camara ni Kinect.")
+                return
+
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        # --- MediaPipe Hands ---
+        mp_hands = mp.solutions.hands
+        hands = mp_hands.Hands(max_num_hands=1,
+                                min_detection_confidence=0.8,
+                                min_tracking_confidence=0.8)
+        mp_draw = mp.solutions.drawing_utils
+
+        hand_style = mp_draw.DrawingSpec(color=(0, 255, 255), thickness=2, circle_radius=2)
+        conn_style = mp_draw.DrawingSpec(color=(255, 255, 0), thickness=2)
+
+        print("\nAplicacion iniciada. Muestra tu mano a la cámara.")
+        print("   Levanta SOLO el índice para escribir")
+        print("   Cierra el puño para dejar de escribir")
+        print("   Toca los botones de color arriba")
+        print("   Q para salir\n")
+
+        while self.running:
+            # --- Capturar frame ---
+            if use_kinect_sdk:
+                # Leer del buffer del Kinect (llenado por el callback)
+                got_frame = False
+                with self._kinect_frame_lock:
+                    if self._kinect_new_frame:
+                        self._kinect_new_frame = False
+                        got_frame = True
+
+                if not got_frame:
+                    cv2.waitKey(1)
+                    continue
+
+                # Convertir buffer BGRA → numpy array BGR
+                bgra = np.frombuffer(self._kinect_buffer, dtype=np.uint8).reshape(CAPTURE_H, CAPTURE_W, 4)
+                frame = bgra[:, :, :3].copy()  # Tomar solo BGR (descartar Alpha)
+            else:
+                success, frame = cap.read()
+                if not success:
+                    continue
+
+            # Espejo horizontal
+            frame = cv2.flip(frame, 1)
+            h, w = frame.shape[:2]
+
+            # Inicializar canvas de dibujo (negro/transparente)
+            if self.drawing_canvas is None:
+                self.drawing_canvas = np.zeros((h, w, 3), dtype=np.uint8)
+
+            # Convertir a RGB para MediaPipe
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = hands.process(rgb_frame)
+
+            # Estado del gesto actual
+            status_text = "Muestra tu mano"
+            status_color = (150, 150, 150)
+
+            if result.multi_hand_landmarks:
+                for hand_lms in result.multi_hand_landmarks:
+                    mp_draw.draw_landmarks(frame, hand_lms, mp_hands.HAND_CONNECTIONS,
+                                           hand_style, conn_style)
+
+                    index_tip = hand_lms.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                    ix, iy = int(index_tip.x * w), int(index_tip.y * h)
+
+                    cv2.circle(frame, (ix, iy), 10, self.brush_color_bgr, cv2.FILLED)
+                    cv2.circle(frame, (ix, iy), 12, (255, 255, 255), 2)
+
+                    if iy < TOOLBAR_HEIGHT:
+                        self._check_toolbar_touch(ix, iy)
+                        self.prev_x, self.prev_y = None, None
+                        self.is_drawing = False
+                        status_text = "Seleccionando..."
+                        status_color = (0, 255, 255)
+
+                    elif self._is_index_up(hand_lms) and not self._is_fist(hand_lms):
+                        if not self.is_drawing:
+                            self.is_drawing = True
+                            self.prev_x, self.prev_y = None, None
+
+                        if self.prev_x is not None and self.prev_y is not None:
+                            cv2.line(self.drawing_canvas,
+                                     (self.prev_x, self.prev_y), (ix, iy),
+                                     self.brush_color_bgr, self.brush_size)
+                        self.prev_x, self.prev_y = ix, iy
+
+                        status_text = "Escribiendo..."
+                        status_color = (0, 255, 0)
+
+                    else:
+                        self.is_drawing = False
+                        self.prev_x, self.prev_y = None, None
+                        if self._is_fist(hand_lms):
+                            status_text = "Puño cerrado (pausa)"
+                            status_color = (0, 0, 255)
+                        else:
+                            status_text = "Mano detectada"
+                            status_color = (255, 200, 0)
+            else:
+                self.is_drawing = False
+                self.prev_x, self.prev_y = None, None
+
+            # =========================================
+            # COMBINAR: Cámara + Dibujo superpuesto
+            # =========================================
+            gray_canvas = cv2.cvtColor(self.drawing_canvas, cv2.COLOR_BGR2GRAY)
+            _, mask = cv2.threshold(gray_canvas, 10, 255, cv2.THRESH_BINARY)
+            mask_inv = cv2.bitwise_not(mask)
+
+            bg = cv2.bitwise_and(frame, frame, mask=mask_inv)
+            fg = cv2.bitwise_and(self.drawing_canvas, self.drawing_canvas, mask=mask)
+
+            combined = cv2.add(bg, fg)
+
+            self._dibujar_toolbar(combined)
+
+            cv2.putText(combined, status_text, (15, h - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2, cv2.LINE_AA)
+
+            color_name = COLORES[self.color_index][0]
+            cv2.putText(combined, f"Color: {color_name}", (w - 160, h - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.brush_color_bgr, 2, cv2.LINE_AA)
+
+            # Fuente de video
+            src_text = "Kinect SDK" if use_kinect_sdk else "Webcam"
+            cv2.putText(combined, src_text, (w - 130, 85),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1, cv2.LINE_AA)
+
+            cv2.imshow("Kinect - Escritura en el Aire", combined)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q') or key == 27:
+                self.running = False
+                try:
+                    self.root.quit()
+                except:
+                    pass
+                break
+
+        # Liberar recursos
+        if use_kinect_sdk:
+            try:
+                self._kinect_runtime.close()
+            except:
+                pass
+        elif cap is not None:
+            cap.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    app = KinectApp()

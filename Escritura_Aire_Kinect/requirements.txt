@@ -1,0 +1,12 @@
+# Kinect App v2 - Escritura en el Aire
+# Python 3.10 | Kinect Xbox 360 (modelo 1414) | Kinect SDK v1.8
+
+opencv-python==4.8.0.76
+mediapipe==0.10.5
+easyocr==1.7.0
+torch
+torchvision
+torchaudio
+Pillow
+comtypes
+pygame
