@@ -51,9 +51,9 @@ def preprocess_audio(input_path: str) -> tuple[np.ndarray, int]:
     return y, TARGET_SR
 
 
-def split_wav(input_path: str, num_segments: int = 5):
+def split_wav(input_path: str, segment_duration_sec: float = 10.0):
     """
-    Pre-procesa y divide un archivo WAV en N partes iguales.
+    Pre-procesa y divide un archivo WAV en segmentos de duración fija.
     Los segmentos se guardan en la misma carpeta que el archivo original.
     """
     if not os.path.exists(input_path):
@@ -63,12 +63,13 @@ def split_wav(input_path: str, num_segments: int = 5):
     y, sr = preprocess_audio(input_path)
 
     total_samples = len(y)
-    samples_per_segment = math.ceil(total_samples / num_segments)
+    samples_per_segment = int(segment_duration_sec * sr)
+    num_segments = math.ceil(total_samples / samples_per_segment)
 
     base_dir  = os.path.dirname(input_path)
     base_name = os.path.splitext(os.path.basename(input_path))[0]
 
-    print(f"\nDividiendo en {num_segments} segmentos de ~{samples_per_segment/sr:.2f} s...")
+    print(f"\nDividiendo en {num_segments} segmentos de {segment_duration_sec} s...")
     for i in range(num_segments):
         start   = i * samples_per_segment
         end     = min((i + 1) * samples_per_segment, total_samples)
@@ -83,5 +84,5 @@ def split_wav(input_path: str, num_segments: int = 5):
 
 
 if __name__ == "__main__":
-    audio_path = "/home/subblack/uni/ADL/Aplicaciones-de-Deep-Learning/sing-activity/dataset/wavs/snuff.wav"
-    split_wav(audio_path, num_segments=5)
+    audio_path = "/home/subblack/uni/ADL/Aplicaciones-de-Deep-Learning/sing-activity/dataset/wavs/snuff_es.wav"
+    split_wav(audio_path, segment_duration_sec=10.0)
