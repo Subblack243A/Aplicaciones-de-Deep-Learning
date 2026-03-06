@@ -1,6 +1,6 @@
 # Text Recognition Pipeline (CNN)
 
-Este proyecto implementa una Red Neuronal Convolucional (CNN) desde cero utilizando **PyTorch** para clasificar imágenes de texto escrito en 4 categorías: `duvan`, `david`, `felipe` y `laura`.
+Este proyecto implementa una Red Neuronal Convolucional (CNN) desde cero utilizando **PyTorch** para clasificar imágenes de texto escrito en 4 categorías: `duvan`, `sierra`, `felipe` y `laura`.
 
 ## 📁 Estructura del Proyecto
 
@@ -34,7 +34,7 @@ Organiza tus imágenes en la carpeta `data/` siguiendo este esquema:
 ```text
 data/
 ├── duvan/   --> imagen1.jpg, imagen2.png...
-├── david/   --> ...
+├── sierra/  --> ...
 ├── felipe/  --> ...
 └── laura/   --> ...
 ```
@@ -70,7 +70,7 @@ _Nota: Puedes editar el script `predict.py` para cambiar la ruta de la imagen de
    - Redimensiona las imágenes a un tamaño fijo de **128x32 píxeles**.
    - Convierte las imágenes a escala de grises.
    - Normaliza los valores de los píxeles.
-   - Mapea las etiquetas a índices: `{duvan: 0, david: 1, felipe: 2, laura: 3}`.
+   - Mapea las etiquetas a índices: `{duvan: 0, sierra: 1, felipe: 2, laura: 3}`.
 
 2. **Arquitectura (`model.py`)**:
    - Utiliza una CNN modular con 3 bloques de: `Convolución (3x3) -> ReLU -> MaxPool (2x2)`.

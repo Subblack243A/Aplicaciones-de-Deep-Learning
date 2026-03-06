@@ -12,7 +12,7 @@ class TextDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         self.root_dir = root_dir
         self.transform = transform
-        self.classes = ["duvan", "david", "felipe", "laura"]
+        self.classes = ["duvan", "sierra", "felipe", "laura"]
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         
         self.samples = []
@@ -52,6 +52,6 @@ def get_transforms():
 
 if __name__ == "__main__":
     # Prueba rápida de la lógica de transformación
-    print("Mapeo de etiquetas:", {cls: i for i, cls in enumerate(["duvan", "david", "felipe", "laura"])})
+    print("Mapeo de etiquetas:", {cls: i for i, cls in enumerate(["duvan", "sierra", "felipe", "laura"])})
     t = get_transforms()
     print("Transformaciones configuradas:", t)

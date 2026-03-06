@@ -16,7 +16,7 @@ def train_model(data_dir, num_epochs=20, batch_size=16, learning_rate=0.001):
     dataset = TextDataset(root_dir=data_dir, transform=transform)
     
     if len(dataset) == 0:
-        print(f"Error: No se encontraron imágenes en {data_dir}. Asegúrate de que las subcarpetas 'duvan', 'david', 'felipe' y 'laura' existan y contengan imágenes.")
+        print(f"Error: No se encontraron imágenes en {data_dir}. Asegúrate de que las subcarpetas 'duvan', 'sierra', 'felipe' y 'laura' existan y contengan imágenes.")
         return
 
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -71,10 +71,10 @@ if __name__ == "__main__":
     # Crear carpeta de datos si no existe (solo para estructura demostrativa)
     if not os.path.exists(data_path):
         os.makedirs(data_path, exist_ok=True)
-        for cls in ["duvan", "david", "felipe", "laura"]:
+        for cls in ["duvan", "sierra", "felipe", "laura"]:
             os.makedirs(os.path.join(data_path, cls), exist_ok=True)
         print(f"Carpeta de datos creada en {data_path}. Por favor, coloca las imágenes en las subcarpetas correspondientes.")
     
     # Ejecutar entrenamiento
     # Se reduce el número de épocas para la prueba inicial si el usuario lo ejecuta sin datos
-    train_model(data_dir=data_path, num_epochs=10)
+    train_model(data_dir=data_path, num_epochs=15)

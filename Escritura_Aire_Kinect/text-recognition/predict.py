@@ -14,7 +14,7 @@ def predict_and_save(image_path, model_path=None):
         model_path = os.path.join(os.path.dirname(__file__), "model.pth")
     
     # 2. Clases (debe coincidir con dataset.py)
-    classes = ["duvan", "david", "felipe", "laura"]
+    classes = ["duvan", "sierra", "felipe", "laura"]
     
     # 3. Cargar modelo
     model = TextCNN(num_classes=len(classes)).to(device)
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     # Ejemplo de uso:
     # Asegúrate de tener una imagen para probar o pasa la ruta por parámetro
     # IMPORTANTE: El script espera que el archivo model.pth ya exista.
-    test_image = os.path.join(os.path.dirname(__file__), "test.jpeg")
+    test_image = os.path.join(os.path.dirname(__file__), "fel.jpeg")
     
     if os.path.exists(test_image):
         predict_and_save(test_image)
