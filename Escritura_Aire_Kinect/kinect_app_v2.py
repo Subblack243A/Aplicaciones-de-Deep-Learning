@@ -95,7 +95,7 @@ class KinectApp:
         self.prev_x, self.prev_y = None, None
 
         # --- Suavizado del trazo ---
-        self.smooth_buffer_size = 5   # Cantidad de puntos para promediar
+        self.smooth_buffer_size = 10   # Cantidad de puntos para promediar
         self.point_buffer = deque(maxlen=self.smooth_buffer_size)
         self.is_drawing = False
 
