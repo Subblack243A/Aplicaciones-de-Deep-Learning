@@ -15,6 +15,7 @@ import mediapipe as mp
 import numpy as np
 import ctypes
 import math
+from collections import deque
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import threading
@@ -77,8 +78,9 @@ COLORES = [
 ]
 
 TOOLBAR_HEIGHT = 70       # Altura de la barra de botones de color
-BORRAR_BTN_WIDTH = 100    # Ancho del botón "Borrar"
-GUARDAR_BTN_WIDTH = 110   # Ancho del botón "Guardar"
+BORRAR_BTN_WIDTH = 80     # Ancho del botón "Borrar Todo"
+BORRADOR_BTN_WIDTH = 90   # Ancho del botón "Borrador"
+GUARDAR_BTN_WIDTH = 100   # Ancho del botón "Guardar"
 
 
 class KinectApp:
@@ -91,11 +93,17 @@ class KinectApp:
         self.color_index = 0
         self.brush_size = 5
         self.prev_x, self.prev_y = None, None
+
+        # --- Suavizado del trazo ---
+        self.smooth_buffer_size = 5   # Cantidad de puntos para promediar
+        self.point_buffer = deque(maxlen=self.smooth_buffer_size)
         self.is_drawing = False
 
         # --- Posiciones de botones (se calculan en _dibujar_toolbar) ---
         self.color_buttons = []
         self.borrar_button = None
+        self.borrador_button = None
+        self.is_eraser = False
 
         # --- Cargar OCR (EasyOCR + PyTorch) ---
         try:
@@ -170,8 +178,9 @@ class KinectApp:
             "Dedo indice arriba -> Escribir\n"
             "Puno cerrado -> Dejar de escribir\n"
             "Toca un color en la camara\n"
+            "Toca 'Borrador' para corregir\n"
+            "Toca 'Borrar Todo' para limpiar todo\n"
             "Toca 'Guardar' para exportar\n"
-            "Toca 'Borrar' para limpiar\n"
             "Q -> Salir"
         )
         tk.Label(self.root, text=instrucciones, bg="#1e1e2e", fg="#7f849c",
@@ -283,6 +292,13 @@ class KinectApp:
         ]
         return all(checks)
 
+    def _smooth_point(self, x, y):
+        """Agrega un punto al buffer y retorna la posición suavizada (promedio)."""
+        self.point_buffer.append((x, y))
+        avg_x = int(sum(p[0] for p in self.point_buffer) / len(self.point_buffer))
+        avg_y = int(sum(p[1] for p in self.point_buffer) / len(self.point_buffer))
+        return avg_x, avg_y
+
     # =========================================================
     #  TOOLBAR: Botones de colores en la imagen de la cámara
     # =========================================================
@@ -297,10 +313,10 @@ class KinectApp:
 
         # --- Botones de colores ---
         num = len(COLORES)
-        btn_w, btn_h = 100, 45
-        spacing = 15
+        btn_w, btn_h = 80, 45
+        spacing = 12
         total = num * btn_w + (num - 1) * spacing
-        start_x = 20
+        start_x = 15
         y_top = (TOOLBAR_HEIGHT - btn_h) // 2
 
         self.color_buttons = []
@@ -320,26 +336,44 @@ class KinectApp:
                 cv2.rectangle(img, (x1, y1), (x2, y2), (180, 180, 180), 1)
 
             # Texto
-            ts = cv2.getTextSize(nombre, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)[0]
+            ts = cv2.getTextSize(nombre, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
             tx = x1 + (btn_w - ts[0]) // 2
             ty = y1 + (btn_h + ts[1]) // 2
             cv2.putText(img, nombre, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55, (255, 255, 255), 2, cv2.LINE_AA)
+                        0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
             self.color_buttons.append((x1, y1, x2, y2, i))
 
-        # --- Botón Borrar ---
-        bx1 = w - BORRAR_BTN_WIDTH - GUARDAR_BTN_WIDTH - 40
+        # --- Botón Borrar Todo (Limpia) ---
+        bx1 = w - BORRAR_BTN_WIDTH - GUARDAR_BTN_WIDTH - 30
         bx2 = bx1 + BORRAR_BTN_WIDTH
         by1, by2 = y_top, y_top + btn_h
-        cv2.rectangle(img, (bx1, by1), (bx2, by2), (60, 60, 60), -1)
-        cv2.rectangle(img, (bx1, by1), (bx2, by2), (100, 100, 255), 2)
-        ts = cv2.getTextSize("Borrar", cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)[0]
+        cv2.rectangle(img, (bx1, by1), (bx2, by2), (40, 40, 60), -1)
+        cv2.rectangle(img, (bx1, by1), (bx2, by2), (120, 120, 255), 1)
+        ts = cv2.getTextSize("Limpia", cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
         tx = bx1 + (BORRAR_BTN_WIDTH - ts[0]) // 2
         ty = by1 + (btn_h + ts[1]) // 2
-        cv2.putText(img, "Borrar", (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55, (100, 100, 255), 2, cv2.LINE_AA)
+        cv2.putText(img, "Limpia", (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45, (150, 150, 255), 1, cv2.LINE_AA)
         self.borrar_button = (bx1, by1, bx2, by2)
+
+        # --- Botón Borrador (Parcial) ---
+        ex1 = bx1 - BORRADOR_BTN_WIDTH - 12
+        ex2 = ex1 + BORRADOR_BTN_WIDTH
+        cv2.rectangle(img, (ex1, by1), (ex2, by2), (60, 60, 60), -1)
+        
+        # Resaltar si está activo
+        if self.is_eraser:
+            cv2.rectangle(img, (ex1 - 2, by1 - 2), (ex2 + 2, by2 + 2), (255, 255, 255), 2)
+            cv2.rectangle(img, (ex1, by1), (ex2, by2), (200, 200, 200), 1)
+        else:
+            cv2.rectangle(img, (ex1, by1), (ex2, by2), (150, 150, 150), 1)
+
+        ts = cv2.getTextSize("Borrador", cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
+        tx = ex1 + (BORRADOR_BTN_WIDTH - ts[0]) // 2
+        cv2.putText(img, "Borrador", (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        self.borrador_button = (ex1, by1, ex2, by2)
 
         # --- Botón Guardar ---
         gx1 = w - GUARDAR_BTN_WIDTH - 20
@@ -359,13 +393,25 @@ class KinectApp:
             if x1 <= x <= x2 and y1 <= y <= y2:
                 self.color_index = idx
                 self.brush_color_bgr = COLORES[idx][1]
+                self.is_eraser = False
                 try:
                     self.lbl_color.config(text=f"Color actual: {COLORES[idx][0]}")
                 except:
                     pass
                 return True
 
-        # Verificar botón borrar
+        # Verificar botón borrador (parcial)
+        if hasattr(self, 'borrador_button') and self.borrador_button:
+            ex1, ey1, ex2, ey2 = self.borrador_button
+            if ex1 <= x <= ex2 and ey1 <= y <= ey2:
+                self.is_eraser = True
+                try:
+                    self.lbl_color.config(text="Modo: Borrador")
+                except:
+                    pass
+                return True
+
+        # Verificar botón borrar (total)
         if self.borrar_button:
             bx1, by1, bx2, by2 = self.borrar_button
             if bx1 <= x <= bx2 and by1 <= y <= by2:
@@ -555,6 +601,7 @@ class KinectApp:
                     if iy < TOOLBAR_HEIGHT:
                         self._check_toolbar_touch(ix, iy)
                         self.prev_x, self.prev_y = None, None
+                        self.point_buffer.clear()
                         self.is_drawing = False
                         status_text = "Seleccionando..."
                         status_color = (0, 255, 255)
@@ -563,19 +610,26 @@ class KinectApp:
                         if not self.is_drawing:
                             self.is_drawing = True
                             self.prev_x, self.prev_y = None, None
+                            self.point_buffer.clear()
+
+                        # Suavizar la posición del dedo
+                        sx, sy = self._smooth_point(ix, iy)
 
                         if self.prev_x is not None and self.prev_y is not None:
+                            color = (0, 0, 0) if self.is_eraser else self.brush_color_bgr
+                            size = self.brush_size * 2 if self.is_eraser else self.brush_size
                             cv2.line(self.drawing_canvas,
-                                     (self.prev_x, self.prev_y), (ix, iy),
-                                     self.brush_color_bgr, self.brush_size)
-                        self.prev_x, self.prev_y = ix, iy
+                                     (self.prev_x, self.prev_y), (sx, sy),
+                                     color, size)
+                        self.prev_x, self.prev_y = sx, sy
 
-                        status_text = "Escribiendo..."
-                        status_color = (0, 255, 0)
+                        status_text = "Borrando..." if self.is_eraser else "Escribiendo..."
+                        status_color = (255, 255, 255) if self.is_eraser else (0, 255, 0)
 
                     else:
                         self.is_drawing = False
                         self.prev_x, self.prev_y = None, None
+                        self.point_buffer.clear()
                         if self._is_fist(hand_lms):
                             status_text = "Puño cerrado (pausa)"
                             status_color = (0, 0, 255)
@@ -585,6 +639,7 @@ class KinectApp:
             else:
                 self.is_drawing = False
                 self.prev_x, self.prev_y = None, None
+                self.point_buffer.clear()
 
             # =========================================
             # COMBINAR: Cámara + Dibujo superpuesto

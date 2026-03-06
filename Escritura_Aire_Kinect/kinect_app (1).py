@@ -6,6 +6,7 @@ import math
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox
 import threading
+from collections import deque
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -36,6 +37,12 @@ class KinectApp:
         self.brush_size = 5
         self.running = True
         self.prev_x, self.prev_y = 0, 0
+
+        # Suavizado del trazo
+        self.smooth_window = 5          # Cantidad de puntos para promediar (mayor = más suave)
+        self.smooth_buffer = deque(maxlen=self.smooth_window)
+        self.stroke_delay_frames = 3    # Frames de espera antes de empezar a dibujar
+        self.stroke_frame_count = 0     # Contador de frames con gesto activo
         
         try:
             print("Cargando la arquitectura PyTorch basado en EasyOCR...")
@@ -205,14 +212,29 @@ class KinectApp:
                 elif self.mode == "pizarra":
                     cv2.circle(img, (x1, y1), 10, self.brush_color_bgr, cv2.FILLED)
                     if dist < 40:
-                        if self.prev_x == 0 and self.prev_y == 0:
+                        # Acumular frames antes de empezar a dibujar (evita trazos accidentales)
+                        self.stroke_frame_count += 1
+                        if self.stroke_frame_count < self.stroke_delay_frames:
+                            # Aún en espera, solo guardar posición inicial
                             self.prev_x, self.prev_y = x1, y1
-                        cv2.line(self.canvas, (self.prev_x, self.prev_y), (x1, y1), self.brush_color_bgr, self.brush_size)
-                        self.prev_x, self.prev_y = x1, y1
+                        else:
+                            # Agregar punto al buffer y calcular promedio suavizado
+                            self.smooth_buffer.append((x1, y1))
+                            sx = int(np.mean([p[0] for p in self.smooth_buffer]))
+                            sy = int(np.mean([p[1] for p in self.smooth_buffer]))
+
+                            if self.prev_x == 0 and self.prev_y == 0:
+                                self.prev_x, self.prev_y = sx, sy
+                            cv2.line(self.canvas, (self.prev_x, self.prev_y), (sx, sy), self.brush_color_bgr, self.brush_size)
+                            self.prev_x, self.prev_y = sx, sy
                     else:
                         self.prev_x, self.prev_y = 0, 0
+                        self.smooth_buffer.clear()
+                        self.stroke_frame_count = 0
             else:
                 self.prev_x, self.prev_y = 0, 0
+                self.smooth_buffer.clear()
+                self.stroke_frame_count = 0
                 
             cv2.imshow("Kinect - Deteccion de Mano", img)
             if self.mode == "pizarra":
