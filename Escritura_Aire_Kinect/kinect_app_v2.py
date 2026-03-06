@@ -33,6 +33,15 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 # ------------------------------------------
+# --- INTEGRACIÓN RECONOCIMIENTO TEXTO PERSONALIZADO ---
+# Añadir la subcarpeta text-recognition al path para poder importar predict.py
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "text-recognition"))
+try:
+    from predict import predict_and_save
+except ImportError as e:
+    print(f"Aviso: No se pudo importar el modelo personalizado: {e}")
+    predict_and_save = None
+# -----------------------------------------------------
 
 # --- PARCHE PARA EASYOCR (Pillow 10+) ---
 # EasyOCR usa Image.ANTIALIAS el cual fue eliminado en Pillow 10.
@@ -379,8 +388,18 @@ class KinectApp:
             if gx1 <= x <= gx2 and gy1 <= y <= gy2:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 # Auto-guardar PNG y TXT
-                self._save_png(os.path.join(SAVE_DIR, f"dibujo_{timestamp}.png"))
+                img_path = os.path.join(SAVE_DIR, f"dibujo_{timestamp}.png")
+                self._save_png(img_path)
                 self._save_txt(os.path.join(SAVE_DIR, f"texto_{timestamp}.txt"))
+                
+                # --- Ejecutar predicción personalizada ---
+                if predict_and_save:
+                    try:
+                        print("Ejecutando predicción de texto personalizada...")
+                        predict_and_save(img_path)
+                    except Exception as e:
+                        print(f"Error en la predicción personalizada: {e}")
+                # ------------------------------------------
                 # Limpiar tras guardar (opcional, pero util para seguir escribiendo)
                 # self.drawing_canvas[:] = 0 
                 return True

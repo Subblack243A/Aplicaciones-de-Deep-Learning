@@ -1,8 +1,12 @@
 import torch
 from PIL import Image
 from torchvision import transforms
-from model import TextCNN
-from dataset import get_transforms
+try:
+    from model import TextCNN
+    from dataset import get_transforms
+except ImportError:
+    from .model import TextCNN
+    from .dataset import get_transforms
 import os
 
 def predict_and_save(image_path, model_path=None):
@@ -11,7 +15,7 @@ def predict_and_save(image_path, model_path=None):
     
     # Si no se proporciona model_path, usar el de la misma carpeta del script
     if model_path is None:
-        model_path = os.path.join(os.path.dirname(__file__), "model.pth")
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model.pth")
     
     # 2. Clases (debe coincidir con dataset.py)
     classes = ["duvan", "sierra", "felipe", "laura"]
@@ -45,10 +49,10 @@ def predict_and_save(image_path, model_path=None):
     # 6. Guardar resultado en TXT
     # El archivo tendrá el nombre de la clase identificada
     txt_filename = "result.txt"
-    txt_path = os.path.join(os.path.dirname(__file__), txt_filename)
+    txt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), txt_filename)
     
     with open(txt_path, "w") as f:
-        f.write(f"{predicted_class}")
+        f.write(f"{predicted_class.upper()}")
     
     print(f"Resultado guardado en: {txt_path}")
 
