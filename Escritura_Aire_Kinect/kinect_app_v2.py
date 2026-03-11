@@ -25,6 +25,7 @@ import torchvision.models as models
 import easyocr
 import os
 import sys
+import re
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 
@@ -247,7 +248,12 @@ class KinectApp:
             ocr_img = cv2.add(bg, fg)
 
             resultados = self.reader.readtext(ocr_img)
-            texto = "\n".join([r[1] for r in resultados])
+            # Juntar todo el texto detectado en una sola cadena
+            texto_crudo = "".join([r[1] for r in resultados])
+            # Limpiar: reemplazos especiales, quitar espacios y saltos de línea
+            texto = texto_crudo.replace("#", "A")
+            texto = texto.replace("q", "a")
+            texto = texto.replace(" ", "").replace("\n", "").replace("\r", "")
 
             with open(path, "w", encoding="utf-8-sig") as f:
                 f.write(texto)
@@ -666,7 +672,9 @@ class KinectApp:
             cv2.putText(combined, src_text, (w - 130, 85),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1, cv2.LINE_AA)
 
-            cv2.imshow("Kinect - Escritura en el Aire", combined)
+            # Agrandar la ventana para mejor visualización
+            display = cv2.resize(combined, (960, 720), interpolation=cv2.INTER_LINEAR)
+            cv2.imshow("Kinect - Escritura en el Aire", display)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == 27:
