@@ -248,12 +248,22 @@ class KinectApp:
             ocr_img = cv2.add(bg, fg)
 
             resultados = self.reader.readtext(ocr_img)
+            print("\n--- DEBUG OCR ---")
+            print(f"Resultados crudos de EasyOCR: {[r[1] for r in resultados]}")
+            
             # Juntar todo el texto detectado en una sola cadena
             texto_crudo = "".join([r[1] for r in resultados])
+            print(f"Texto unido antes de limpiar: '{texto_crudo}'")
+            
             # Limpiar: reemplazos especiales, quitar espacios y saltos de línea
             texto = texto_crudo.replace("#", "A")
             texto = texto.replace("q", "a")
+            # Volver a asegurar que se borran simbolos extranos por si acaso (opcional)
+            texto = re.sub(r'[^a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]', '', texto)
             texto = texto.replace(" ", "").replace("\n", "").replace("\r", "")
+            
+            print(f"Texto final para TXT: '{texto}'")
+            print("-----------------\n")
 
             with open(path, "w", encoding="utf-8-sig") as f:
                 f.write(texto)
@@ -305,6 +315,23 @@ class KinectApp:
         avg_y = int(sum(p[1] for p in self.point_buffer) / len(self.point_buffer))
         return avg_x, avg_y
 
+    def _dibujar_cuadricula(self, img):
+        """Dibuja una cuadrícula sutil de referencia que no afecta el guardado."""
+        h, w = img.shape[:2]
+        # Crear un overlay para la cuadrícula para hacerla semitransparente
+        overlay = img.copy()
+        
+        # Líneas horizontales (rango: desde debajo del toolbar hasta abajo, cada 50px)
+        for y in range(TOOLBAR_HEIGHT, h, 60):
+            cv2.line(overlay, (0, y), (w, y), (255, 255, 255), 1)
+        
+        # Líneas verticales (cada 60px)
+        for x in range(0, w, 60):
+            cv2.line(overlay, (x, TOOLBAR_HEIGHT), (x, h), (255, 255, 255), 1)
+            
+        # Mezclar con la imagen original (muy sutil, 15% de opacidad)
+        cv2.addWeighted(overlay, 0.15, img, 0.85, 0, img)
+
     # =========================================================
     #  TOOLBAR: Botones de colores en la imagen de la cámara
     # =========================================================
@@ -351,7 +378,7 @@ class KinectApp:
             self.color_buttons.append((x1, y1, x2, y2, i))
 
         # --- Botón Borrar Todo (Limpia) ---
-        bx1 = w - BORRAR_BTN_WIDTH - GUARDAR_BTN_WIDTH - 30
+        bx1 = w - BORRAR_BTN_WIDTH - 20
         bx2 = bx1 + BORRAR_BTN_WIDTH
         by1, by2 = y_top, y_top + btn_h
         cv2.rectangle(img, (bx1, by1), (bx2, by2), (40, 40, 60), -1)
@@ -381,16 +408,25 @@ class KinectApp:
                     0.45, (255, 255, 255), 1, cv2.LINE_AA)
         self.borrador_button = (ex1, by1, ex2, by2)
 
-        # --- Botón Guardar ---
+        # --- Botón Guardar (Esquina inferior derecha) ---
         gx1 = w - GUARDAR_BTN_WIDTH - 20
         gx2 = w - 20
-        cv2.rectangle(img, (gx1, by1), (gx2, by2), (40, 80, 40), -1)
-        cv2.rectangle(img, (gx1, by1), (gx2, by2), (100, 255, 100), 2)
+        # Mover a la parte inferior
+        gy1 = h - btn_h - 20
+        gy2 = h - 20
+        
+        # Fondo y borde
+        cv2.rectangle(img, (gx1, gy1), (gx2, gy2), (40, 80, 40), -1)
+        cv2.rectangle(img, (gx1, gy1), (gx2, gy2), (100, 255, 100), 2)
+        
+        # Texto
         ts = cv2.getTextSize("Guardar", cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)[0]
         tx = gx1 + (GUARDAR_BTN_WIDTH - ts[0]) // 2
-        cv2.putText(img, "Guardar", (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
+        ty_save = gy1 + (btn_h + ts[1]) // 2
+        cv2.putText(img, "Guardar", (tx, ty_save), cv2.FONT_HERSHEY_SIMPLEX,
                     0.55, (100, 255, 100), 2, cv2.LINE_AA)
-        self.guardar_button = (gx1, by1, gx2, by2)
+        
+        self.guardar_button = (gx1, gy1, gx2, gy2)
 
     def _check_toolbar_touch(self, x, y):
         """Verifica si el dedo índice toca un botón del toolbar."""
@@ -542,8 +578,8 @@ class KinectApp:
         # --- MediaPipe Hands ---
         mp_hands = mp.solutions.hands
         hands = mp_hands.Hands(max_num_hands=1,
-                                min_detection_confidence=0.8,
-                                min_tracking_confidence=0.8)
+                                min_detection_confidence=0.5,
+                                min_tracking_confidence=0.5)
         mp_draw = mp.solutions.drawing_utils
 
         hand_style = mp_draw.DrawingSpec(color=(0, 255, 255), thickness=2, circle_radius=2)
@@ -601,18 +637,28 @@ class KinectApp:
                     index_tip = hand_lms.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
                     ix, iy = int(index_tip.x * w), int(index_tip.y * h)
 
-                    cv2.circle(frame, (ix, iy), 10, self.brush_color_bgr, cv2.FILLED)
-                    cv2.circle(frame, (ix, iy), 12, (255, 255, 255), 2)
+                    if self.is_eraser:
+                        # Dibujar círculo traslúcido para el borrador
+                        overlay = frame.copy()
+                        cv2.circle(overlay, (ix, iy), self.brush_size * 4, (150, 150, 150), cv2.FILLED)
+                        cv2.addWeighted(overlay, 0.4, frame, 0.6, 0, frame)
+                        cv2.circle(frame, (ix, iy), self.brush_size * 4, (255, 255, 255), 2)
+                    else:
+                        # Dibujar cursor normal de dibujo
+                        cv2.circle(frame, (ix, iy), 10, self.brush_color_bgr, cv2.FILLED)
+                        cv2.circle(frame, (ix, iy), 12, (255, 255, 255), 2)
 
-                    if iy < TOOLBAR_HEIGHT:
-                        self._check_toolbar_touch(ix, iy)
-                        self.prev_x, self.prev_y = None, None
-                        self.point_buffer.clear()
-                        self.is_drawing = False
-                        status_text = "Seleccionando..."
-                        status_color = (0, 255, 255)
+                    # Comprobar colisión con botones (Arriba o Abajo)
+                    if iy < TOOLBAR_HEIGHT or iy > h - 100:
+                        if self._check_toolbar_touch(ix, iy):
+                            self.prev_x, self.prev_y = None, None
+                            self.point_buffer.clear()
+                            self.is_drawing = False
+                            status_text = "Botón presionado..."
+                            status_color = (0, 255, 255)
+                            continue  # Saltar el dibujo este frame para evitar trazos accidentales
 
-                    elif self._is_index_up(hand_lms) and not self._is_fist(hand_lms):
+                    if self._is_index_up(hand_lms) and not self._is_fist(hand_lms):
                         if not self.is_drawing:
                             self.is_drawing = True
                             self.prev_x, self.prev_y = None, None
@@ -659,6 +705,7 @@ class KinectApp:
 
             combined = cv2.add(bg, fg)
 
+            self._dibujar_cuadricula(combined)
             self._dibujar_toolbar(combined)
 
             # Usar el nuevo método para soportar la 'ñ'

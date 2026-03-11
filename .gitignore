@@ -16,6 +16,7 @@ __pycache__/
 *.wav
 *.flac
 *.png
+capturas/
 
 # Modelos guardados
 model_saved/
