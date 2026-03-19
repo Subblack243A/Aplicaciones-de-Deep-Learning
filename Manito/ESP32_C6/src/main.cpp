@@ -9,11 +9,11 @@ const char* password = "P4tac0n_cOn_Qu3s0";
 WebSocketsServer webSocket = WebSocketsServer(81);
 
 // Pines de los servos
-#define PIN_PULGAR_PALMA  13
-#define PIN_PULGAR_DEDO   11
+#define PIN_PULGAR_PALMA  2
+#define PIN_PULGAR_DEDO   13
 #define PIN_INDICE        12
 #define PIN_MEDIO          7
-#define PIN_ANULAR         2
+#define PIN_ANULAR         3
 #define PIN_MENIQUE        6
 
 Servo servoPulgarPalma;
@@ -30,6 +30,24 @@ int posIndice      = 0;
 int posMedio       = 0;
 int posAnular      = 0;
 int posMenique     = 0;
+
+void resetTodosLosDedos() {
+    posPulgarPalma = 0;
+    posPulgarDedo  = 0;
+    posIndice      = 0;
+    posMedio       = 0;
+    posAnular      = 0;
+    posMenique     = 0;
+
+    servoPulgarPalma.write(0);
+    servoPulgarDedo.write(0);
+    servoIndice.write(0);
+    servoMedio.write(0);
+    servoAnular.write(0);
+    servoMenique.write(0);
+
+    Serial.println("Todos los dedos vuelven a 0°");
+}
 
 void moverTodosLosDedos(int grados) {
     posPulgarPalma = constrain(posPulgarPalma + grados, 0, 180);
@@ -65,7 +83,9 @@ void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t lengt
                 Serial.printf("Mensaje recibido: %s\n", msg.c_str());
 
                 if (msg == "ya") {
-                    moverTodosLosDedos(20);
+                    moverTodosLosDedos(50);
+                } else if (msg == "no") {
+                    resetTodosLosDedos();
                 }
             }
             break;

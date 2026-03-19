@@ -10,6 +10,7 @@ def iniciar_consola():
         print("Conectado a la Manito ESP32-C6.")
         print("  - Escribe una letra y presiona Enter para enviarla.")
         print("  - Escribe 'ya' para mover todos los dedos 20°.")
+        print("  - Escribe 'no' para regresar todos los dedos a 0°.")
         print("  - Ctrl+C para salir.")
 
         while True:
@@ -20,6 +21,9 @@ def iniciar_consola():
             if entrada.lower() == "ya":
                 ws.send("ya")
                 print("Enviado: ya  →  todos los dedos se mueven 20°")
+            elif entrada.lower() == "no":
+                ws.send("no")
+                print("Enviado: no  →  todos los dedos vuelven a 0°")
             else:
                 ws.send(entrada[0])
                 print(f"Enviado: {entrada[0]}")
