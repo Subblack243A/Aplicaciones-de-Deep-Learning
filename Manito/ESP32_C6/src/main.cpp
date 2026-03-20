@@ -9,12 +9,13 @@ const char* password = "P4tac0n_cOn_Qu3s0";
 WebSocketsServer webSocket = WebSocketsServer(81);
 
 // Pines de los servos
+// GPIO seguros en ESP32-C6 (evitar 0,9=strapping/BOOT; 18,19=USB; 16,17=UART)
 #define PIN_PULGAR_PALMA   2
 #define PIN_PULGAR_DEDO   13
 #define PIN_INDICE        12
-#define PIN_MEDIO         21
+#define PIN_MEDIO         21   // era 9 (BOOT) → cambiado a 4
 #define PIN_ANULAR         3
-#define PIN_MENIQUE        0
+#define PIN_MENIQUE        0   // era 0 (strapping) → cambiado a 6
 
 Servo servoPulgarPalma;
 Servo servoPulgarDedo;
@@ -24,11 +25,11 @@ Servo servoAnular;
 Servo servoMenique;
 
 // Rangos máximos por dedo (el pulgar y anular recorren menos)
-#define MAX_PULGAR_PALMA  120
+#define MAX_PULGAR_PALMA  50
 #define MAX_PULGAR_DEDO   120
-#define MAX_INDICE        180
-#define MAX_MEDIO         170
-#define MAX_ANULAR        150
+#define MAX_INDICE        200
+#define MAX_MEDIO         180
+#define MAX_ANULAR        190
 #define MAX_MENIQUE       180
 
 // Posición actual de cada servo
@@ -39,7 +40,38 @@ int posMedio       = 0;
 int posAnular      = 0;
 int posMenique     = 0;
 
-// Establece todos los dedos a posiciones específicas (movimiento suave interpolado)
+// Mueve un único servo suavemente de 'desde' hasta 'hasta'
+void moverServo(Servo& servo, int desde, int hasta) {
+    int diff = abs(hasta - desde);
+    if (diff == 0) return;
+    for (int step = 1; step <= diff; step++) {
+        int pos = desde + (long)(hasta - desde) * step / diff;
+        servo.write(pos);
+        delay(5);
+    }
+    servo.write(hasta);
+}
+
+// Mueve un grupo de servos en paralelo hasta sus targets
+void moverParalelo(Servo* servos[], int starts[], int targets[], int n) {
+    int maxDiff = 0;
+    for (int i = 0; i < n; i++) {
+        int d = abs(targets[i] - starts[i]);
+        if (d > maxDiff) maxDiff = d;
+    }
+    if (maxDiff == 0) return;
+    for (int step = 1; step <= maxDiff; step++) {
+        for (int i = 0; i < n; i++) {
+            int pos = starts[i] + (long)(targets[i] - starts[i]) * step / maxDiff;
+            servos[i]->write(pos);
+        }
+        delay(5);
+    }
+    for (int i = 0; i < n; i++) servos[i]->write(targets[i]);
+}
+
+// Establece todos los dedos a posiciones específicas.
+// Orden de movimiento: 1) pulgar dedo  2) pulgar palma  3) resto en paralelo
 void ponerPosicion(int pp, int pd, int idx, int med, int anu, int men) {
     pp  = constrain(pp,  0, MAX_PULGAR_PALMA);
     pd  = constrain(pd,  0, MAX_PULGAR_DEDO);
@@ -48,35 +80,23 @@ void ponerPosicion(int pp, int pd, int idx, int med, int anu, int men) {
     anu = constrain(anu, 0, MAX_ANULAR);
     men = constrain(men, 0, MAX_MENIQUE);
 
-    int startPos[6] = {posPulgarPalma, posPulgarDedo, posIndice, posMedio, posAnular, posMenique};
-    int targets[6]  = {pp, pd, idx, med, anu, men};
-    Servo* servos[6] = {&servoPulgarPalma, &servoPulgarDedo, &servoIndice, &servoMedio, &servoAnular, &servoMenique};
+    // 1. Pulgar dedo (se recoge primero)
+    moverServo(servoPulgarDedo, posPulgarDedo, pd);
+    posPulgarDedo = pd;
 
-    // Calcular máximo recorrido para interpolar todos a la misma duración
-    int maxDiff = 0;
-    for (int i = 0; i < 6; i++) {
-        int d = abs(targets[i] - startPos[i]);
-        if (d > maxDiff) maxDiff = d;
-    }
+    // 2. Pulgar palma (gira después)
+    moverServo(servoPulgarPalma, posPulgarPalma, pp);
+    posPulgarPalma = pp;
 
-    // Mover paso a paso (todos los dedos en paralelo)
-    if (maxDiff > 0) {
-        for (int step = 1; step <= maxDiff; step++) {
-            for (int i = 0; i < 6; i++) {
-                int pos = startPos[i] + (long)(targets[i] - startPos[i]) * step / maxDiff;
-                servos[i]->write(pos);
-            }
-            delay(5);
-        }
-    }
-
-    // Posiciones finales exactas
-    posPulgarPalma = pp;  servoPulgarPalma.write(pp);
-    posPulgarDedo  = pd;  servoPulgarDedo.write(pd);
-    posIndice      = idx; servoIndice.write(idx);
-    posMedio       = med; servoMedio.write(med);
-    posAnular      = anu; servoAnular.write(anu);
-    posMenique     = men; servoMenique.write(men);
+    // 3. Resto de dedos en paralelo
+    Servo* servos[4] = {&servoIndice, &servoMedio, &servoAnular, &servoMenique};
+    int starts[4]    = {posIndice, posMedio, posAnular, posMenique};
+    int targets[4]   = {idx, med, anu, men};
+    moverParalelo(servos, starts, targets, 4);
+    posIndice = idx;
+    posMedio  = med;
+    posAnular = anu;
+    posMenique = men;
 
     Serial.printf("Pos: pp=%d pd=%d idx=%d med=%d anu=%d men=%d\n",
         pp, pd, idx, med, anu, men);
