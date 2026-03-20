@@ -1,10 +1,10 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, scrolledtext
 import websocket
 import threading
+import time
 
 ESP32_IP = "192.168.1.50"
-URI = f"ws://{ESP32_IP}:81"
 
 # ── Colores y estilos ──
 BG = "#1a1a2e"
@@ -31,9 +31,10 @@ class ManitoApp:
 
         self.ws = None
         self.conectado = False
+        self._escuchando = False
 
         self._crear_ui()
-        self.root.after(100, self._conectar)
+        self.root.after(100, self._reconectar)
 
     # ── UI ──
 
@@ -149,7 +150,7 @@ class ManitoApp:
         ).pack(pady=(0, 5))
 
         frame_controles = tk.Frame(self.root, bg=BG)
-        frame_controles.pack(pady=(0, 20))
+        frame_controles.pack(pady=(0, 10))
 
         btn_reset = tk.Button(
             frame_controles,
@@ -181,17 +182,83 @@ class ManitoApp:
         )
         btn_cerrar.pack(side=tk.LEFT, padx=8)
 
-        # Estado de último envío
-        self.lbl_ultimo = tk.Label(
+        # Diagnóstico
+        frame_diag = tk.Frame(self.root, bg=BG)
+        frame_diag.pack(pady=(5, 0))
+
+        btn_test = tk.Button(
+            frame_diag,
+            text="🔧 Test Pines",
+            font=("Segoe UI", 11),
+            width=30,
+            bg="#f39c12",
+            fg="white",
+            activebackground="#e67e22",
+            activeforeground="white",
+            relief=tk.FLAT,
+            cursor="hand2",
+            command=lambda: self._enviar("test"),
+        )
+        btn_test.pack()
+
+        # Separador
+        tk.Frame(self.root, bg=ACCENT, height=1).pack(fill=tk.X, padx=30, pady=10)
+
+        # ── Serial Monitor inalámbrico ──
+        tk.Label(
             self.root,
-            text="",
-            font=("Segoe UI", 10),
+            text="SERIAL MONITOR (WiFi)",
+            font=("Segoe UI", 10, "bold"),
             fg=TEXT_DIM,
             bg=BG,
-        )
-        self.lbl_ultimo.pack(pady=(0, 15))
+        ).pack(pady=(0, 5))
 
-    # ── Conexión ──
+        self.txt_log = scrolledtext.ScrolledText(
+            self.root,
+            font=("Consolas", 9),
+            width=52,
+            height=10,
+            bg="#0d1117",
+            fg="#58a6ff",
+            insertbackground=TEXT,
+            relief=tk.FLAT,
+            state=tk.DISABLED,
+            wrap=tk.WORD,
+        )
+        self.txt_log.pack(padx=15, pady=(0, 5))
+
+        btn_limpiar = tk.Button(
+            self.root,
+            text="Limpiar log",
+            font=("Segoe UI", 9),
+            bg=ACCENT,
+            fg=TEXT_DIM,
+            activebackground=HIGHLIGHT,
+            activeforeground=TEXT,
+            relief=tk.FLAT,
+            cursor="hand2",
+            command=self._limpiar_log,
+        )
+        btn_limpiar.pack(pady=(0, 15))
+
+    # ── Log ──
+
+    def _agregar_log(self, texto):
+        self.txt_log.config(state=tk.NORMAL)
+        self.txt_log.insert(tk.END, texto + "\n")
+        self.txt_log.see(tk.END)
+        self.txt_log.config(state=tk.DISABLED)
+
+    def _log_seguro(self, texto):
+        """Agrega al log desde cualquier thread de forma segura."""
+        self.root.after(0, self._agregar_log, texto)
+
+    def _limpiar_log(self):
+        self.txt_log.config(state=tk.NORMAL)
+        self.txt_log.delete("1.0", tk.END)
+        self.txt_log.config(state=tk.DISABLED)
+
+    # ── Conexión con escucha de mensajes ──
 
     def _conectar(self):
         ip = self.entry_ip.get().strip()
@@ -199,37 +266,71 @@ class ManitoApp:
         try:
             self.ws = websocket.create_connection(uri, timeout=3)
             self.conectado = True
-            self.lbl_estado.config(text="● Conectado", fg="#2ecc71")
-        except Exception:
+            self.root.after(0, lambda: self.lbl_estado.config(text="● Conectado", fg="#2ecc71"))
+            self._log_seguro(f"Conectado a {uri}")
+            self._iniciar_escucha()
+        except Exception as e:
             self.conectado = False
-            self.lbl_estado.config(text="● Desconectado", fg="#e74c3c")
+            self.root.after(0, lambda: self.lbl_estado.config(text="● Desconectado", fg="#e74c3c"))
+            self._log_seguro(f"Error conectando: {e}")
 
     def _reconectar(self):
+        self._escuchando = False
         if self.ws:
             try:
                 self.ws.close()
             except Exception:
                 pass
+            self.ws = None
+        self.conectado = False
         self.lbl_estado.config(text="● Conectando...", fg="#f5a623")
         self.root.update()
         threading.Thread(target=self._conectar, daemon=True).start()
+
+    def _iniciar_escucha(self):
+        """Hilo que escucha mensajes del ESP32 (logs via WebSocket)."""
+        self._escuchando = True
+
+        def escuchar():
+            while self._escuchando and self.ws:
+                try:
+                    self.ws.settimeout(1.0)
+                    msg = self.ws.recv()
+                    if msg:
+                        self._log_seguro(f"ESP32> {msg}")
+                except websocket.WebSocketTimeoutException:
+                    continue
+                except Exception:
+                    if self._escuchando:
+                        self.conectado = False
+                        self._escuchando = False
+                        self.root.after(0, lambda: self.lbl_estado.config(
+                            text="● Desconectado", fg="#e74c3c"))
+                        self._log_seguro("Conexion perdida.")
+                    break
+
+        threading.Thread(target=escuchar, daemon=True).start()
 
     # ── Envío ──
 
     def _enviar(self, comando):
         if not self.conectado or not self.ws:
-            messagebox.showwarning("Sin conexión", "No estás conectado a la Manito.\nVerifica la IP y presiona Conectar.")
+            messagebox.showwarning(
+                "Sin conexión",
+                "No estás conectado a la Manito.\nVerifica la IP y presiona Conectar.",
+            )
             return
         try:
             self.ws.send(comando)
             nombres = {
-                "a": "A  ✊👍", "e": "E  🤏", "i": "I  🤙",
-                "o": "O  👌", "u": "U  ✌️",
-                "reset": "Mano abierta ✋", "cerrar": "Puño cerrado ✊",
+                "a": "A", "e": "E", "i": "I", "o": "O", "u": "U",
+                "reset": "Abrir mano", "cerrar": "Cerrar mano",
+                "test": "Test pines",
             }
-            self.lbl_ultimo.config(text=f"Último: {nombres.get(comando, comando)}")
+            self._agregar_log(f">>> Enviado: {nombres.get(comando, comando)}")
         except Exception as e:
             self.conectado = False
+            self._escuchando = False
             self.lbl_estado.config(text="● Desconectado", fg="#e74c3c")
             messagebox.showerror("Error", f"Se perdió la conexión:\n{e}")
 

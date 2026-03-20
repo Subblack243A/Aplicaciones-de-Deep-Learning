@@ -13,9 +13,9 @@ WebSocketsServer webSocket = WebSocketsServer(81);
 #define PIN_PULGAR_PALMA   2
 #define PIN_PULGAR_DEDO   13
 #define PIN_INDICE        12
-#define PIN_MEDIO         21   // era 9 (BOOT) → cambiado a 4
+#define PIN_MEDIO         21
 #define PIN_ANULAR         3
-#define PIN_MENIQUE        0   // era 0 (strapping) → cambiado a 6
+#define PIN_MENIQUE        0
 
 Servo servoPulgarPalma;
 Servo servoPulgarDedo;
@@ -32,6 +32,10 @@ Servo servoMenique;
 #define MAX_ANULAR        190
 #define MAX_MENIQUE       180
 
+// Tope real del hardware del servo (nunca escribir más de esto)
+#define SERVO_MIN 0
+#define SERVO_MAX 180
+
 // Posición actual de cada servo
 int posPulgarPalma = 0;
 int posPulgarDedo  = 0;
@@ -40,22 +44,46 @@ int posMedio       = 0;
 int posAnular      = 0;
 int posMenique     = 0;
 
+// ── Log inalámbrico: Serial + WebSocket ──
+
+char _logBuf[256];
+
+// Envía un mensaje tanto a Serial como a todos los clientes WebSocket
+void wsLog(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(_logBuf, sizeof(_logBuf), fmt, args);
+    va_end(args);
+
+    Serial.println(_logBuf);
+    webSocket.broadcastTXT(_logBuf);
+}
+
+// Escribe un valor seguro al servo (clampeado a 0-180)
+void servoWriteSafe(Servo& servo, int pos) {
+    servo.write(constrain(pos, SERVO_MIN, SERVO_MAX));
+}
+
 // Mueve un único servo suavemente de 'desde' hasta 'hasta'
 void moverServo(Servo& servo, int desde, int hasta) {
+    desde = constrain(desde, SERVO_MIN, SERVO_MAX);
+    hasta = constrain(hasta, SERVO_MIN, SERVO_MAX);
     int diff = abs(hasta - desde);
     if (diff == 0) return;
     for (int step = 1; step <= diff; step++) {
         int pos = desde + (long)(hasta - desde) * step / diff;
-        servo.write(pos);
+        servoWriteSafe(servo, pos);
         delay(5);
     }
-    servo.write(hasta);
+    servoWriteSafe(servo, hasta);
 }
 
 // Mueve un grupo de servos en paralelo hasta sus targets
 void moverParalelo(Servo* servos[], int starts[], int targets[], int n) {
     int maxDiff = 0;
     for (int i = 0; i < n; i++) {
+        starts[i]  = constrain(starts[i],  SERVO_MIN, SERVO_MAX);
+        targets[i] = constrain(targets[i], SERVO_MIN, SERVO_MAX);
         int d = abs(targets[i] - starts[i]);
         if (d > maxDiff) maxDiff = d;
     }
@@ -63,11 +91,11 @@ void moverParalelo(Servo* servos[], int starts[], int targets[], int n) {
     for (int step = 1; step <= maxDiff; step++) {
         for (int i = 0; i < n; i++) {
             int pos = starts[i] + (long)(targets[i] - starts[i]) * step / maxDiff;
-            servos[i]->write(pos);
+            servoWriteSafe(*servos[i], pos);
         }
         delay(5);
     }
-    for (int i = 0; i < n; i++) servos[i]->write(targets[i]);
+    for (int i = 0; i < n; i++) servoWriteSafe(*servos[i], targets[i]);
 }
 
 // Establece todos los dedos a posiciones específicas.
@@ -98,109 +126,132 @@ void ponerPosicion(int pp, int pd, int idx, int med, int anu, int men) {
     posAnular = anu;
     posMenique = men;
 
-    Serial.printf("Pos: pp=%d pd=%d idx=%d med=%d anu=%d men=%d\n",
+    wsLog("Pos: pp=%d pd=%d idx=%d med=%d anu=%d men=%d",
         pp, pd, idx, med, anu, men);
 }
 
 // ── Vocales en Lengua de Señas Colombiana (LSC) ──
 
 void hacerLetraA() {
-    // A: Puño cerrado, pulgar al lado (no cruza)
-    Serial.println("Sena: A");
-    ponerPosicion(
-        0,                  // pulgar_palma: al lado
-        MAX_PULGAR_DEDO/2,  // pulgar_dedo: ligeramente doblado
-        MAX_INDICE,         // indice: cerrado
-        MAX_MEDIO,          // medio: cerrado
-        MAX_ANULAR,         // anular: cerrado
-        MAX_MENIQUE         // menique: cerrado
-    );
+    wsLog("Sena: A");
+    ponerPosicion(0, MAX_PULGAR_DEDO/2, MAX_INDICE, MAX_MEDIO, MAX_ANULAR, MAX_MENIQUE);
 }
 
 void hacerLetraE() {
-    // E: Dedos doblados a la mitad, pulgar cruzado al frente
-    Serial.println("Sena: E");
-    ponerPosicion(
-        MAX_PULGAR_PALMA * 3/4,  // pulgar_palma: cruza hacia adentro
-        0,                        // pulgar_dedo: estirado
-        MAX_INDICE / 2,           // indice: doblado a mitad
-        MAX_MEDIO / 2,            // medio: doblado a mitad
-        MAX_ANULAR / 2,           // anular: doblado a mitad
-        MAX_MENIQUE / 2           // menique: doblado a mitad
-    );
+    wsLog("Sena: E");
+    ponerPosicion(MAX_PULGAR_PALMA*3/4, 0, MAX_INDICE/2, MAX_MEDIO/2, MAX_ANULAR/2, MAX_MENIQUE/2);
 }
 
 void hacerLetraI() {
-    // I: Puño cerrado, meñique extendido
-    Serial.println("Sena: I");
-    ponerPosicion(
-        MAX_PULGAR_PALMA / 2,  // pulgar_palma: cruza sobre puno
-        MAX_PULGAR_DEDO / 2,   // pulgar_dedo: doblado
-        MAX_INDICE,             // indice: cerrado
-        MAX_MEDIO,              // medio: cerrado
-        MAX_ANULAR,             // anular: cerrado
-        0                       // menique: extendido
-    );
+    wsLog("Sena: I");
+    ponerPosicion(MAX_PULGAR_PALMA/2, MAX_PULGAR_DEDO/2, MAX_INDICE, MAX_MEDIO, MAX_ANULAR, 0);
 }
 
 void hacerLetraO() {
-    // O: Todos los dedos curvados formando un circulo con el pulgar
-    Serial.println("Sena: O");
-    ponerPosicion(
-        MAX_PULGAR_PALMA / 2,  // pulgar_palma: hacia adelante
-        MAX_PULGAR_DEDO / 2,   // pulgar_dedo: curvado
-        MAX_INDICE * 2/3,      // indice: curvado
-        MAX_MEDIO * 2/3,       // medio: curvado
-        MAX_ANULAR * 2/3,      // anular: curvado
-        MAX_MENIQUE * 2/3      // menique: curvado
-    );
+    wsLog("Sena: O");
+    ponerPosicion(MAX_PULGAR_PALMA/2, MAX_PULGAR_DEDO/2, MAX_INDICE*2/3, MAX_MEDIO*2/3, MAX_ANULAR*2/3, MAX_MENIQUE*2/3);
 }
 
 void hacerLetraU() {
-    // U: Indice y medio extendidos juntos, resto cerrado
-    Serial.println("Sena: U");
-    ponerPosicion(
-        MAX_PULGAR_PALMA / 2,  // pulgar_palma: cruza
-        MAX_PULGAR_DEDO / 2,   // pulgar_dedo: doblado
-        0,                      // indice: extendido
-        0,                      // medio: extendido
-        MAX_ANULAR,             // anular: cerrado
-        MAX_MENIQUE             // menique: cerrado
-    );
+    wsLog("Sena: U");
+    ponerPosicion(MAX_PULGAR_PALMA/2, MAX_PULGAR_DEDO/2, 0, 0, MAX_ANULAR, MAX_MENIQUE);
 }
 
 void resetMano() {
-    Serial.println("Reset: mano abierta");
+    wsLog("Reset: mano abierta");
     ponerPosicion(0, 0, 0, 0, 0, 0);
 }
 
 void cerrarMano() {
-    Serial.println("Cerrar: puno completo");
+    wsLog("Cerrar: puno completo");
     ponerPosicion(MAX_PULGAR_PALMA, MAX_PULGAR_DEDO, MAX_INDICE, MAX_MEDIO, MAX_ANULAR, MAX_MENIQUE);
+}
+
+// ── Diagnóstico: prueba cada pin uno por uno ──
+
+struct PinInfo {
+    const char* nombre;
+    int pin;
+    Servo* servo;
+};
+
+void testPines() {
+    PinInfo pines[] = {
+        {"PULGAR_PALMA", PIN_PULGAR_PALMA, &servoPulgarPalma},
+        {"PULGAR_DEDO",  PIN_PULGAR_DEDO,  &servoPulgarDedo},
+        {"INDICE",       PIN_INDICE,       &servoIndice},
+        {"MEDIO",        PIN_MEDIO,        &servoMedio},
+        {"ANULAR",       PIN_ANULAR,       &servoAnular},
+        {"MENIQUE",      PIN_MENIQUE,      &servoMenique},
+    };
+    int n = sizeof(pines) / sizeof(pines[0]);
+
+    wsLog("== DIAGNOSTICO DE PINES ==");
+    wsLog("Cada servo: 0 -> 90 -> 0");
+
+    for (int i = 0; i < n; i++) {
+        wsLog("[%d/%d] %s (GPIO %d)...", i+1, n, pines[i].nombre, pines[i].pin);
+
+        servoWriteSafe(*pines[i].servo, 0);
+        delay(500);
+
+        for (int pos = 0; pos <= 90; pos++) {
+            servoWriteSafe(*pines[i].servo, pos);
+            delay(10);
+        }
+        wsLog("  -> en 90, esperando 1s");
+        delay(1000);
+
+        for (int pos = 90; pos >= 0; pos--) {
+            servoWriteSafe(*pines[i].servo, pos);
+            delay(10);
+        }
+        delay(500);
+
+        wsLog("  -> %s GPIO %d LISTO", pines[i].nombre, pines[i].pin);
+    }
+
+    wsLog("== DIAGNOSTICO COMPLETO ==");
+    for (int i = 0; i < n; i++) {
+        wsLog("  %s = GPIO %d", pines[i].nombre, pines[i].pin);
+    }
+}
+
+// ── WebSocket + Serial command handler ──
+
+void procesarComando(String msg) {
+    msg.trim();
+    msg.toLowerCase();
+    if (msg.length() == 0) return;
+
+    wsLog("CMD: %s", msg.c_str());
+
+    if (msg == "a")           hacerLetraA();
+    else if (msg == "e")      hacerLetraE();
+    else if (msg == "i")      hacerLetraI();
+    else if (msg == "o")      hacerLetraO();
+    else if (msg == "u")      hacerLetraU();
+    else if (msg == "reset")  resetMano();
+    else if (msg == "cerrar") cerrarMano();
+    else if (msg == "test")   testPines();
+    else wsLog("Comando desconocido: %s", msg.c_str());
 }
 
 void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
     switch (type) {
         case WStype_CONNECTED:
-            Serial.printf("[WS] Cliente %u conectado\n", num);
+            wsLog("[WS] Cliente %u conectado", num);
             break;
         case WStype_DISCONNECTED:
-            Serial.printf("[WS] Cliente %u desconectado\n", num);
+            wsLog("[WS] Cliente %u desconectado", num);
             break;
         case WStype_TEXT: {
             if (length > 0) {
-                String msg = String((char*)payload).substring(0, length);
-                msg.toLowerCase();
-                Serial.printf("Mensaje recibido: %s\n", msg.c_str());
-
-                if (msg == "a")           hacerLetraA();
-                else if (msg == "e")      hacerLetraE();
-                else if (msg == "i")      hacerLetraI();
-                else if (msg == "o")      hacerLetraO();
-                else if (msg == "u")      hacerLetraU();
-                else if (msg == "reset")  resetMano();
-                else if (msg == "cerrar") cerrarMano();
-                else Serial.printf("Comando desconocido: %s\n", msg.c_str());
+                // Construcción segura del String desde payload
+                char buf[length + 1];
+                memcpy(buf, payload, length);
+                buf[length] = '\0';
+                procesarComando(String(buf));
             }
             break;
         }
@@ -236,10 +287,15 @@ void setup() {
 
     webSocket.begin();
     webSocket.onEvent(onWebSocketEvent);
-    Serial.println("WebSocket listo en puerto 81");
+    wsLog("WebSocket listo en puerto 81");
 }
 
 void loop() {
     ArduinoOTA.handle();
     webSocket.loop();
+
+    if (Serial.available()) {
+        String cmd = Serial.readStringUntil('\n');
+        procesarComando(cmd);
+    }
 }
