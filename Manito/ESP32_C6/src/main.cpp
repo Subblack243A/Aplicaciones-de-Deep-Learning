@@ -1,35 +1,44 @@
 #include <WiFi.h>
 #include <ArduinoOTA.h>
 #include <WebSocketsServer.h>
-#include <ESP32Servo.h>
 
-const char* ssid     = "M@STV-SARA-BELLA";
-const char* password = "P4tac0n_cOn_Qu3s0";
+const char* ssid     = "holi:3";
+const char* password = "Sayejoda78";
 
 WebSocketsServer webSocket = WebSocketsServer(81);
 
 // Pines de los servos
 // GPIO seguros en ESP32-C6 (evitar 0,9=strapping/BOOT; 18,19=USB; 16,17=UART)
-#define PIN_PULGAR_PALMA   2
-#define PIN_PULGAR_DEDO   13
-#define PIN_INDICE        12
-#define PIN_MEDIO         21
-#define PIN_ANULAR         3
-#define PIN_MENIQUE        0
+#define PIN_PULGAR_PALMA   3
+#define PIN_PULGAR_DEDO    2
+#define PIN_INDICE         23
+#define PIN_MEDIO          22
+#define PIN_ANULAR         6
+#define PIN_MENIQUE        7
 
-Servo servoPulgarPalma;
-Servo servoPulgarDedo;
-Servo servoIndice;
-Servo servoMedio;
-Servo servoAnular;
-Servo servoMenique;
+// PWM config para servos: 50Hz, 16 bits de resolución
+#define SERVO_FREQ       50
+#define SERVO_RES        16
+// Pulso mínimo y máximo en us (0° y 180°)
+#define SERVO_MIN_US     500
+#define SERVO_MAX_US     2500
+// Duty cycle correspondiente (resolución 16 bits = 65536, periodo 20000us)
+#define SERVO_MIN_DUTY   ((SERVO_MIN_US * 65536L) / 20000)  // ~1638
+#define SERVO_MAX_DUTY   ((SERVO_MAX_US * 65536L) / 20000)  // ~8192
+
+// Pines de servo en array para facilitar operaciones
+const int servoPins[] = {
+    PIN_PULGAR_PALMA, PIN_PULGAR_DEDO,
+    PIN_INDICE, PIN_MEDIO, PIN_ANULAR, PIN_MENIQUE
+};
+#define NUM_SERVOS 6
 
 // Rangos máximos por dedo (el pulgar y anular recorren menos)
-#define MAX_PULGAR_PALMA  50
-#define MAX_PULGAR_DEDO   120
-#define MAX_INDICE        200
+#define MAX_PULGAR_PALMA  90
+#define MAX_PULGAR_DEDO   180
+#define MAX_INDICE        190
 #define MAX_MEDIO         180
-#define MAX_ANULAR        190
+#define MAX_ANULAR        180
 #define MAX_MENIQUE       180
 
 // Tope real del hardware del servo (nunca escribir más de esto)
@@ -59,27 +68,34 @@ void wsLog(const char* fmt, ...) {
     webSocket.broadcastTXT(_logBuf);
 }
 
+// Convierte ángulo (0-180) a duty cycle LEDC y escribe al pin
+void servoWrite(int pin, int angulo) {
+    angulo = constrain(angulo, SERVO_MIN, SERVO_MAX);
+    uint32_t duty = SERVO_MIN_DUTY + (long)(SERVO_MAX_DUTY - SERVO_MIN_DUTY) * angulo / 180;
+    ledcWrite(pin, duty);
+}
+
 // Escribe un valor seguro al servo (clampeado a 0-180)
-void servoWriteSafe(Servo& servo, int pos) {
-    servo.write(constrain(pos, SERVO_MIN, SERVO_MAX));
+void servoWriteSafe(int pin, int pos) {
+    servoWrite(pin, constrain(pos, SERVO_MIN, SERVO_MAX));
 }
 
 // Mueve un único servo suavemente de 'desde' hasta 'hasta'
-void moverServo(Servo& servo, int desde, int hasta) {
+void moverServo(int pin, int desde, int hasta) {
     desde = constrain(desde, SERVO_MIN, SERVO_MAX);
     hasta = constrain(hasta, SERVO_MIN, SERVO_MAX);
     int diff = abs(hasta - desde);
     if (diff == 0) return;
     for (int step = 1; step <= diff; step++) {
         int pos = desde + (long)(hasta - desde) * step / diff;
-        servoWriteSafe(servo, pos);
+        servoWriteSafe(pin, pos);
         delay(5);
     }
-    servoWriteSafe(servo, hasta);
+    servoWriteSafe(pin, hasta);
 }
 
 // Mueve un grupo de servos en paralelo hasta sus targets
-void moverParalelo(Servo* servos[], int starts[], int targets[], int n) {
+void moverParalelo(int pins[], int starts[], int targets[], int n) {
     int maxDiff = 0;
     for (int i = 0; i < n; i++) {
         starts[i]  = constrain(starts[i],  SERVO_MIN, SERVO_MAX);
@@ -91,15 +107,14 @@ void moverParalelo(Servo* servos[], int starts[], int targets[], int n) {
     for (int step = 1; step <= maxDiff; step++) {
         for (int i = 0; i < n; i++) {
             int pos = starts[i] + (long)(targets[i] - starts[i]) * step / maxDiff;
-            servoWriteSafe(*servos[i], pos);
+            servoWriteSafe(pins[i], pos);
         }
         delay(5);
     }
-    for (int i = 0; i < n; i++) servoWriteSafe(*servos[i], targets[i]);
+    for (int i = 0; i < n; i++) servoWriteSafe(pins[i], targets[i]);
 }
 
 // Establece todos los dedos a posiciones específicas.
-// Orden de movimiento: 1) pulgar dedo  2) pulgar palma  3) resto en paralelo
 void ponerPosicion(int pp, int pd, int idx, int med, int anu, int men) {
     pp  = constrain(pp,  0, MAX_PULGAR_PALMA);
     pd  = constrain(pd,  0, MAX_PULGAR_DEDO);
@@ -108,23 +123,31 @@ void ponerPosicion(int pp, int pd, int idx, int med, int anu, int men) {
     anu = constrain(anu, 0, MAX_ANULAR);
     men = constrain(men, 0, MAX_MENIQUE);
 
+
+    // 3. Resto de dedos secuencial
+    moverServo(PIN_INDICE, posIndice, idx);
+    posIndice = idx;
+    delay(50);
+
+    moverServo(PIN_MEDIO, posMedio, med);
+    posMedio = med;
+    delay(50);
+
+    moverServo(PIN_ANULAR, posAnular, anu);
+    posAnular = anu;
+    delay(50);
+
+    moverServo(PIN_MENIQUE, posMenique, men);
+    posMenique = men;
+    delay(50);
+
     // 1. Pulgar dedo (se recoge primero)
-    moverServo(servoPulgarDedo, posPulgarDedo, pd);
+    moverServo(PIN_PULGAR_DEDO, posPulgarDedo, pd);
     posPulgarDedo = pd;
 
     // 2. Pulgar palma (gira después)
-    moverServo(servoPulgarPalma, posPulgarPalma, pp);
+    moverServo(PIN_PULGAR_PALMA, posPulgarPalma, pp);
     posPulgarPalma = pp;
-
-    // 3. Resto de dedos en paralelo
-    Servo* servos[4] = {&servoIndice, &servoMedio, &servoAnular, &servoMenique};
-    int starts[4]    = {posIndice, posMedio, posAnular, posMenique};
-    int targets[4]   = {idx, med, anu, men};
-    moverParalelo(servos, starts, targets, 4);
-    posIndice = idx;
-    posMedio  = med;
-    posAnular = anu;
-    posMenique = men;
 
     wsLog("Pos: pp=%d pd=%d idx=%d med=%d anu=%d men=%d",
         pp, pd, idx, med, anu, men);
@@ -134,12 +157,12 @@ void ponerPosicion(int pp, int pd, int idx, int med, int anu, int men) {
 
 void hacerLetraA() {
     wsLog("Sena: A");
-    ponerPosicion(0, MAX_PULGAR_DEDO/2, MAX_INDICE, MAX_MEDIO, MAX_ANULAR, MAX_MENIQUE);
+    ponerPosicion(MAX_PULGAR_PALMA*3/4, 0, MAX_INDICE, MAX_MEDIO, MAX_ANULAR, MAX_MENIQUE);
 }
 
 void hacerLetraE() {
     wsLog("Sena: E");
-    ponerPosicion(MAX_PULGAR_PALMA*3/4, 0, MAX_INDICE/2, MAX_MEDIO/2, MAX_ANULAR/2, MAX_MENIQUE/2);
+    ponerPosicion(0, MAX_PULGAR_DEDO*4/5, MAX_INDICE/2, MAX_MEDIO/2, MAX_ANULAR/2, MAX_MENIQUE/2);
 }
 
 void hacerLetraI() {
@@ -154,7 +177,7 @@ void hacerLetraO() {
 
 void hacerLetraU() {
     wsLog("Sena: U");
-    ponerPosicion(MAX_PULGAR_PALMA/2, MAX_PULGAR_DEDO/2, 0, 0, MAX_ANULAR, MAX_MENIQUE);
+    ponerPosicion(MAX_PULGAR_PALMA/2, MAX_PULGAR_DEDO/2, 0, MAX_MEDIO, MAX_ANULAR, 0);
 }
 
 void resetMano() {
@@ -172,17 +195,16 @@ void cerrarMano() {
 struct PinInfo {
     const char* nombre;
     int pin;
-    Servo* servo;
 };
 
 void testPines() {
     PinInfo pines[] = {
-        {"PULGAR_PALMA", PIN_PULGAR_PALMA, &servoPulgarPalma},
-        {"PULGAR_DEDO",  PIN_PULGAR_DEDO,  &servoPulgarDedo},
-        {"INDICE",       PIN_INDICE,       &servoIndice},
-        {"MEDIO",        PIN_MEDIO,        &servoMedio},
-        {"ANULAR",       PIN_ANULAR,       &servoAnular},
-        {"MENIQUE",      PIN_MENIQUE,      &servoMenique},
+        {"PULGAR_PALMA", PIN_PULGAR_PALMA},
+        {"PULGAR_DEDO",  PIN_PULGAR_DEDO},
+        {"INDICE",       PIN_INDICE},
+        {"MEDIO",        PIN_MEDIO},
+        {"ANULAR",       PIN_ANULAR},
+        {"MENIQUE",      PIN_MENIQUE},
     };
     int n = sizeof(pines) / sizeof(pines[0]);
 
@@ -192,18 +214,18 @@ void testPines() {
     for (int i = 0; i < n; i++) {
         wsLog("[%d/%d] %s (GPIO %d)...", i+1, n, pines[i].nombre, pines[i].pin);
 
-        servoWriteSafe(*pines[i].servo, 0);
+        servoWriteSafe(pines[i].pin, 0);
         delay(500);
 
         for (int pos = 0; pos <= 90; pos++) {
-            servoWriteSafe(*pines[i].servo, pos);
+            servoWriteSafe(pines[i].pin, pos);
             delay(10);
         }
         wsLog("  -> en 90, esperando 1s");
         delay(1000);
 
         for (int pos = 90; pos >= 0; pos--) {
-            servoWriteSafe(*pines[i].servo, pos);
+            servoWriteSafe(pines[i].pin, pos);
             delay(10);
         }
         delay(500);
@@ -271,13 +293,12 @@ void setup() {
     }
     Serial.printf("\nIP: %s\n", WiFi.localIP().toString().c_str());
 
-    // Inicializar servos
-    servoPulgarPalma.attach(PIN_PULGAR_PALMA);
-    servoPulgarDedo.attach(PIN_PULGAR_DEDO);
-    servoIndice.attach(PIN_INDICE);
-    servoMedio.attach(PIN_MEDIO);
-    servoAnular.attach(PIN_ANULAR);
-    servoMenique.attach(PIN_MENIQUE);
+    // Inicializar servos con LEDC
+    for (int i = 0; i < NUM_SERVOS; i++) {
+        ledcAttach(servoPins[i], SERVO_FREQ, SERVO_RES);
+        servoWrite(servoPins[i], 0);
+        delay(200);
+    }
 
     // Posicion inicial: mano abierta
     resetMano();
