@@ -1,12 +1,13 @@
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
+#include <DNSServer.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <WiFi.h>
 
-const char *ssid = "M@STV-SARA-BELLA";
-const char *password = "P4tac0n_cOn_Qu3s0";
+const char *ssid = "holi:3";
+const char *password = "Sayejoda787";
 
 // AP mode (fallback if WiFi fails)
 const char *ap_ssid = "Manito-LSC";
@@ -14,7 +15,9 @@ const char *ap_password = "asereje78";
 
 WebSocketsServer webSocket = WebSocketsServer(81);
 WebServer server(80);
+DNSServer dnsServer;
 Preferences prefs;
+bool isAPMode = false;
 
 #define PIN_PULGAR_PALMA 3
 #define PIN_PULGAR_DEDO 2
@@ -100,10 +103,10 @@ LetraPos letras[] = {
     {"d", {0, 180, 180, 180, 60, 25},   0, {}, 0},
     {"e", {90, 90, 95, 90, 0, 37},      0, {}, 0},
     {"f", {120, 0, 0, 0, 90, 30},       0, {}, 0},
-    {"g", {0, 180, 180, 180, 0, 0},     0, {{0, 180, 3, 200}}, 1},
-    {"h", {0, 0, 180, 180, 120, 50},    0, {}, 0},
+    {"g", {0, 180, 180, 180, 0, 0},     0, {{0, 180, 3, 180}}, 1},
+    {"h", {0, 0, 180, 180, 120, 50},    0, {{0, 180, 2, 150}, {1, 180, 2, 150}}, 2},
     {"i", {180, 180, 180, 0, 60, 25},   0, {}, 0},
-    {"j", {180, 180, 180, 0, 60, 25},   0, {{3, 40, 1, 150}}, 1},
+    {"j", {180, 180, 180, 0, 60, 25},   0, {{3, 40, 2, 150}}, 1},
     {"k", {0, 0, 180, 180, 45, 25},     0, {}, 0},
     {"l", {0, 180, 180, 180, 0, 0},     0, {}, 0},
     // M: men first → thumb → idx/med/anu halfway
@@ -111,7 +114,7 @@ LetraPos letras[] = {
     // N: men+anu first → thumb → idx/med halfway
     {"n", {90, 90, 180, 180, 120, 40},  0x0C, {}, 0},
     // Ñ: same as N + idx/med wiggle
-    {"ñ", {90, 90, 180, 180, 120, 40},  0x0C, {{0, -90, 2, 150}, {1, -90, 2, 150}}, 2},
+    {"ñ", {90, 90, 180, 180, 120, 40},  0x0C, {{0, -90, 4, 150}, {1, -90, 4, 150}}, 2},
     {"o", {120, 120, 120, 120, 60, 25}, 0, {}, 0},
     {"p", {0, 0, 180, 180, 45, 0},      0, {}, 0},
     {"q", {180, 180, 180, 180, 0, 0},   0, {}, 0},
@@ -286,6 +289,9 @@ int findLetra(const char *nombre) {
   return -1;
 }
 
+// Track if previous letter had fingers mounted on thumb
+static bool prevWasSpecial = false;
+
 void hacerLetra(const char *nombre) {
   int li = findLetra(nombre);
   if (li < 0) { wsLog("Letra desconocida: %s", nombre); return; }
@@ -294,20 +300,37 @@ void hacerLetra(const char *nombre) {
   int *p = letras[li].pos;
   uint8_t mask = letras[li].preThumbMask;
 
-  // 1) Open thumb
-  abrirPulgar();
-  delay(delayBetweenFingers);
+  // ── Phase 1: Safe release from previous letter ──
+  if (prevWasSpecial) {
+    // Coming from m/n/ñ: mounted fingers release first → thumb → rest
+    for (int i = 3; i >= 0; i--) moverDedo(i, 0);  // men→anu→med→idx
+    moverDedo(4, 0);  // pd
+    moverDedo(5, 0);  // pp
+  } else {
+    // Thumb always stretches to 0 between letters
+    moverDedo(4, 0);  // pd
+    moverDedo(5, 0);  // pp
+  }
 
-  // 2) Pre-thumb fingers: close fingers marked in mask BEFORE thumb
-  for (int i = 0; i < 4; i++)
-    if (mask & (1 << i)) moverDedo(i, p[i]);
+  // ── Phase 2: Form new letter ──
+  if (mask) {
+    // Special (m, n, ñ): open all fingers → pre-thumb close → thumb → rest
+    for (int i = 0; i < 4; i++) moverDedo(i, 0);
 
-  // 3) Close thumb to letter position
-  cerrarPulgar(p[4], p[5]);
+    for (int i = 0; i < 4; i++)
+      if (mask & (1 << i)) moverDedo(i, p[i]);
+    cerrarPulgar(p[4], p[5]);
+    for (int i = 0; i < 4; i++)
+      if (!(mask & (1 << i))) moverDedo(i, p[i]);
 
-  // 4) Remaining 4 fingers (not in mask)
-  for (int i = 0; i < 4; i++)
-    if (!(mask & (1 << i))) moverDedo(i, p[i]);
+    prevWasSpecial = true;
+  } else {
+    // Normal: fingers direct → thumb closes
+    for (int i = 0; i < 4; i++) moverDedo(i, p[i]);
+    cerrarPulgar(p[4], p[5]);
+
+    prevWasSpecial = false;
+  }
 
   wsLog("Pos: idx=%d med=%d anu=%d men=%d pd=%d pp=%d",
         p[0], p[1], p[2], p[3], p[4], p[5]);
@@ -590,6 +613,7 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
 <div class="log-wrap">
   <textarea id="log" readonly></textarea>
   <button class="log-btn" onclick="document.getElementById('log').value=''">Limpiar</button>
+  <button class="log-btn" style="background:#27ae60;color:#fff;margin-left:6px" onclick="downloadConfig()">Descargar Config</button>
 </div>
 
 <script>
@@ -602,6 +626,7 @@ const VOWELS = {A:'#e94560',E:'#f5a623',I:'#7ed321',O:'#4a90d9',U:'#9b59b6'};
 
 let settings = {delay_between_fingers_ms:50, delay_between_letters_ms:1500, delay_before_movements_ms:200};
 let letterData = {};
+let lastConfigJSON = null;
 const DEFAULTS = {
   a:[180,180,180,180,60,0], b:[0,0,0,0,120,50], c:[90,90,90,90,45,0],
   d:[0,180,180,180,60,25], e:[90,90,95,90,0,37], f:[120,0,0,0,90,30],
@@ -818,6 +843,7 @@ function connect() {
     if (e.data.startsWith('CONFIG:')) {
       try {
         const cfg = JSON.parse(e.data.substring(7));
+        lastConfigJSON = cfg;
         if (cfg.settings) Object.assign(settings, cfg.settings);
         if (cfg.letras) {
           for (const k in cfg.letras) {
@@ -839,6 +865,18 @@ function send(cmd) {
   ws.send(cmd);
   if (!cmd.startsWith('movefinger') && !cmd.startsWith('getconfig'))
     addLog('>>> ' + cmd.toUpperCase());
+}
+
+function downloadConfig() {
+  if (!lastConfigJSON) { alert('Aún no se ha recibido config del ESP32'); return; }
+  const out = {settings: lastConfigJSON.settings, limits: lastConfigJSON.limits, letters: lastConfigJSON.letras};
+  const blob = new Blob([JSON.stringify(out, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'config.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  addLog('[Config descargada como config.json]');
 }
 
 connect();
@@ -1163,6 +1201,7 @@ void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload,
 // ── HTTP handler ─────────────────────────────────────────────────────
 
 void handleRoot() { server.send_P(200, "text/html", HTML_PAGE); }
+void handleCaptivePortal() { server.sendHeader("Location", "http://192.168.4.1/"); server.send(302); }
 
 // ── Setup & Loop ─────────────────────────────────────────────────────
 
@@ -1189,6 +1228,11 @@ void setup() {
     WiFi.disconnect();
     WiFi.mode(WIFI_AP);
     WiFi.softAP(ap_ssid, ap_password);
+    isAPMode = true;
+
+    // Captive portal: redirect all DNS queries to the ESP32
+    dnsServer.start(53, "*", WiFi.softAPIP());
+
     Serial.printf("Red: %s | Password: %s\n", ap_ssid, ap_password);
     Serial.printf("IP: %s\n", WiFi.softAPIP().toString().c_str());
   }
@@ -1221,6 +1265,14 @@ void setup() {
 
   // HTTP server (serves HTML interface)
   server.on("/", handleRoot);
+  if (isAPMode) {
+    // Captive portal endpoints for Android/iOS/Windows detection
+    server.on("/generate_204", handleCaptivePortal);   // Android
+    server.on("/connecttest.txt", handleCaptivePortal); // Windows
+    server.on("/hotspot-detect.html", handleCaptivePortal); // iOS
+    server.on("/canonical.html", handleCaptivePortal);  // Firefox
+    server.onNotFound(handleCaptivePortal);             // Everything else → redirect
+  }
   server.begin();
   Serial.println("HTTP server en puerto 80");
 
@@ -1229,10 +1281,12 @@ void setup() {
   webSocket.onEvent(onWebSocketEvent);
   _wsReady = true;
   wsLog("WebSocket listo en puerto 81");
-  wsLog("Abrir http://%s en el navegador", WiFi.localIP().toString().c_str());
+  wsLog("Abrir http://%s en el navegador",
+    isAPMode ? WiFi.softAPIP().toString().c_str() : WiFi.localIP().toString().c_str());
 }
 
 void loop() {
+  if (isAPMode) dnsServer.processNextRequest();
   ArduinoOTA.handle();
   server.handleClient();
   webSocket.loop();
