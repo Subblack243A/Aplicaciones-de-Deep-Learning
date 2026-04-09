@@ -1,0 +1,28 @@
+# =============================================================================
+# Conda environment for T2I Text-to-Image training
+# =============================================================================
+# Usage:
+#   conda env create -f environment.yml
+#   conda activate t2i-env
+#
+name: t2i-env
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch>=2.1
+  - torchvision>=0.16
+
+  - pytorch-cuda=12.1
+  - pip
+  - pip:
+      - torchmetrics>=1.2.0
+      - lpips>=0.1.4
+      - captum>=0.7.0
+      - matplotlib>=3.8.0
+      - Pillow>=10.0.0
+
+      - numpy>=1.24.0

@@ -11,18 +11,24 @@ Este repositorio contiene proyectos de Deep Learning organizados sistemáticamen
 
 ```
 Aplicaciones-de-Deep-Learning/
-├── Entrenamiento/           # Códigos de entrenamiento de cada modelo base
-│   ├── ASR_DeepSpeech2/    # Reconocimiento de voz (Speech-to-Text)
-│   ├── T2I_Text2Image/     # Difusión / Texto a Imagen
-│   ├── TTS_Tacotron2/      # Síntesis de voz cantada (Text-to-Speech)
-│   └── OCR_EasyOCR/        # OCR (Adaptado según Kinect app)
+├── Entrenamiento/               # Códigos de entrenamiento de cada modelo base
+│   ├── ASR_DeepSpeech2/        # Reconocimiento de voz (Speech-to-Text)
+│   ├── T2I_Text2Image/         # Texto a Imagen (Transformer Encoder-Decoder)
+│   │   ├── model.py            # Modelo completo (TextEncoder + ImageDecoder)
+│   │   ├── dataset.py          # Generador sintético + DataLoader
+│   │   └── train.py            # Entrenamiento + métricas + XAI
+│   ├── TTS_Tacotron2/          # Síntesis de voz cantada (Text-to-Speech)
+│   └── OCR_EasyOCR/            # OCR (Adaptado según Kinect app)
 │
-├── Implementaciones/        # Proyectos (Flujos de trabajo completos)
-│   ├── Song_Activity/      # MP4 → WAV → STT → Traducción → (Opcional) TTS
-│   ├── Escritura_Aire_Kinect/ # Escritura en aire con Kinect → OCR → TTS
-│   └── Manito/             # Texto → Imagen → OCR → ESP32_C6 (Mano robótica)
+├── Implementaciones/            # Proyectos (Flujos de trabajo completos)
+│   ├── Song_Activity/          # MP4 → WAV → STT → Traducción → (Opcional) TTS
+│   ├── Escritura_Aire_Kinect/  # Escritura en aire con Kinect → OCR → TTS
+│   └── Manito/                 # Texto → Imagen → OCR → ESP32_C6 (Mano robótica)
+│       ├── pipeline_t2i.py     # Pipeline: T2I → OCR → letras
+│       └── enviar_letra.py     # App Tkinter con pestaña Pipeline T2I
 │
-└── Modelos/                # Archivos `.pth` y resultados listos para inferencia
+└── Modelos/                    # Archivos `.pth` y resultados listos para inferencia
+    └── t2i_text2image.pth      # Modelo T2I entrenado
 ```
 
 ---
@@ -90,7 +96,12 @@ python train.py
 
 # Entrenar T2I (Text-to-Image)
 cd Entrenamiento/T2I_Text2Image
-python train_text2image.py
+python train.py                       # Entrenamiento completo
+python train.py --max-epochs 5        # Smoke test
+
+# Pipeline completo (T2I → OCR → Mano)
+cd Implementaciones/Manito
+python pipeline_t2i.py --text "Santiago"
 ```
 
 ### Ejecuciones e Inferencia
