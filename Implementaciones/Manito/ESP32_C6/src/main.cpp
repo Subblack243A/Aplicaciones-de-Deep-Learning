@@ -1,23 +1,15 @@
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
-#include <DNSServer.h>
+#include <WiFiManager.h>
+#include <ESPmDNS.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <WiFi.h>
 
-const char *ssid = "holi:3";
-const char *password = "Sayejoda787";
-
-// AP mode (fallback if WiFi fails)
-const char *ap_ssid = "Manito-LSC";
-const char *ap_password = "asereje78";
-
 WebSocketsServer webSocket = WebSocketsServer(81);
 WebServer server(80);
-DNSServer dnsServer;
 Preferences prefs;
-bool isAPMode = false;
 
 #define PIN_PULGAR_PALMA 3
 #define PIN_PULGAR_DEDO 2
@@ -1208,33 +1200,22 @@ void handleCaptivePortal() { server.sendHeader("Location", "http://192.168.4.1/"
 void setup() {
   Serial.begin(115200);
 
-  // Try STA mode first (connect to existing WiFi)
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  Serial.printf("Conectando a WiFi '%s'", ssid);
-
-  int intentos = 0;
-  while (WiFi.status() != WL_CONNECTED && intentos < 20) {
-    delay(500);
-    Serial.print(".");
-    intentos++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\nConectado! IP: %s\n", WiFi.localIP().toString().c_str());
+  // WiFiManager
+  WiFiManager wm;
+  // wm.resetSettings(); // Descomentar para borrar redes guardadas
+  
+  bool res = wm.autoConnect("Manito-LSC", "asereje78");
+  if (!res) {
+    Serial.println("Fallo conexion WiFi o se alcanzo timeout");
   } else {
-    // Fallback: AP mode (creates own network)
-    Serial.println("\nWiFi no disponible. Iniciando Access Point...");
-    WiFi.disconnect();
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(ap_ssid, ap_password);
-    isAPMode = true;
-
-    // Captive portal: redirect all DNS queries to the ESP32
-    dnsServer.start(53, "*", WiFi.softAPIP());
-
-    Serial.printf("Red: %s | Password: %s\n", ap_ssid, ap_password);
-    Serial.printf("IP: %s\n", WiFi.softAPIP().toString().c_str());
+    Serial.printf("\nConectado! IP: %s\n", WiFi.localIP().toString().c_str());
+  }
+  
+  // Iniciar mDNS
+  if (!MDNS.begin("manito")) {
+    Serial.println("Error configurando mDNS!");
+  } else {
+    Serial.println("mDNS iniciado: manito.local");
   }
 
   // Initialize servos with LEDC
@@ -1265,14 +1246,6 @@ void setup() {
 
   // HTTP server (serves HTML interface)
   server.on("/", handleRoot);
-  if (isAPMode) {
-    // Captive portal endpoints for Android/iOS/Windows detection
-    server.on("/generate_204", handleCaptivePortal);   // Android
-    server.on("/connecttest.txt", handleCaptivePortal); // Windows
-    server.on("/hotspot-detect.html", handleCaptivePortal); // iOS
-    server.on("/canonical.html", handleCaptivePortal);  // Firefox
-    server.onNotFound(handleCaptivePortal);             // Everything else → redirect
-  }
   server.begin();
   Serial.println("HTTP server en puerto 80");
 
@@ -1281,12 +1254,11 @@ void setup() {
   webSocket.onEvent(onWebSocketEvent);
   _wsReady = true;
   wsLog("WebSocket listo en puerto 81");
-  wsLog("Abrir http://%s en el navegador",
-    isAPMode ? WiFi.softAPIP().toString().c_str() : WiFi.localIP().toString().c_str());
+  wsLog("Abrir http://manito.local o http://%s en el navegador",
+    WiFi.localIP().toString().c_str());
 }
 
 void loop() {
-  if (isAPMode) dnsServer.processNextRequest();
   ArduinoOTA.handle();
   server.handleClient();
   webSocket.loop();

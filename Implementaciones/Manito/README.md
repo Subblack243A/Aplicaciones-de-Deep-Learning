@@ -212,7 +212,64 @@ El firmware mueve los dedos en este orden al formar cada letra:
 
 ---
 
+## 🧠 Pipeline de Deep Learning (T2I + OCR)
+
+La mano robótica se integra con modelos de Deep Learning. El pipeline completo se ejecuta desde `pipeline_t2i.py` en esta carpeta:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                   FLUJO (pipeline_t2i.py)                        │
+│                                                                  │
+│  1. Texto ("Santiago")                                           │
+│         │                                                        │
+│         ▼                                                        │
+│  2. T2I Model ──→ Imagen 64×64 con texto renderizado             │
+│     (o fallback Pillow si no hay modelo)                         │
+│         │                                                        │
+│         ▼                                                        │
+│  3. OCR (EasyOCR) ──→ Reconocimiento de caracteres               │
+│         │                                                        │
+│         ▼                                                        │
+│  4. Cola de letras ──→ enviar_letra.py ──→ ESP32-C6 ──→ Servos   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Archivos clave
+
+| Archivo | Descripción |
+|---|---|
+| `pipeline_t2i.py` | **Pipeline completo**: T2I → OCR → letras. Uso standalone o importado |
+| `enviar_letra.py` | App Tkinter con pestaña **"Pipeline T2I"** integrada |
+
+### Uso
+
+**Desde la app** (pestaña "Pipeline T2I"):
+1. Escribir nombre en el campo de texto
+2. ▶ Generar → muestra imagen generada + resultado OCR
+3. ✋ Enviar a la Mano → encola letras una por una
+
+**Standalone**:
+```bash
+python pipeline_t2i.py --text "Santiago"
+python pipeline_t2i.py --text "Duvan" --force-fallback
+```
+
+### Dependencias
+
+| Componente | Ubicación |
+|---|---|
+| **Entrenamiento T2I** | `Entrenamiento/T2I_Text2Image/` (3 archivos: model.py, dataset.py, train.py) |
+| **Modelo entrenado** | `Modelos/t2i_text2image.pth` |
+| **Pipeline** | `Implementaciones/Manito/pipeline_t2i.py` |
+
+> El pipeline incluye un **fallback oculto** (Pillow puro) que se activa si no hay modelo entrenado. El flujo siempre funciona.
+
+---
+
 ## 🤝 Créditos
 
 Proyecto para **Aplicaciones de Deep Learning** — Semestre IX  
 Universidad — Lengua de Señas Colombiana (LSC)
+
+
+

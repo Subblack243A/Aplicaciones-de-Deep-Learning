@@ -5,6 +5,12 @@ import threading
 import json
 import os
 
+try:
+    from pipeline_t2i import Pipeline as T2IPipeline
+    _HAS_PIPELINE = True
+except ImportError:
+    _HAS_PIPELINE = False
+
 ESP32_IP = "manito.local"
 CALIBRACION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -127,6 +133,9 @@ class ManitoApp:
         self.letras  = {k: list(v) for k, v in DEFAULT_LETRAS.items()}
         self.movimientos = {k: [dict(m) for m in v] for k, v in DEFAULT_MOVEMENTS.items()}
         self.pre_thumb = {k: list(v) for k, v in DEFAULT_PRE_THUMB.items()}
+
+        # T2I Pipeline (lazy loaded)
+        self._pipeline = None
 
         self._cargar_config_local()
         self._crear_ui()
@@ -273,13 +282,16 @@ class ManitoApp:
         tab_calib  = tk.Frame(self.notebook, bg=BG)
         tab_lim    = tk.Frame(self.notebook, bg=BG)
         tab_settings = tk.Frame(self.notebook, bg=BG)
+        tab_pipeline = tk.Frame(self.notebook, bg=BG)
         self.notebook.add(tab_main,     text="  Principal  ")
+        self.notebook.add(tab_pipeline, text="  Pipeline T2I  ")
         self.notebook.add(tab_finger,   text="  Probar Dedo  ")
         self.notebook.add(tab_calib,    text="  Calibración  ")
         self.notebook.add(tab_lim,      text="  Límites  ")
         self.notebook.add(tab_settings, text="  Ajustes  ")
 
         self._crear_tab_principal(tab_main)
+        self._crear_tab_pipeline(tab_pipeline)
         self._crear_tab_probar_dedo(tab_finger)
         self._crear_tab_calibracion(tab_calib)
         self._crear_tab_limites(tab_lim)
@@ -917,6 +929,192 @@ class ManitoApp:
         dm = self.settings["delay_before_movements_ms"]
         self._enviar(f"setsettings|{df}|{dl}|{dm}")
         self._agregar_log(f"[Save] Settings: fingers={df}ms letters={dl}ms movs={dm}ms")
+
+    # ── Pipeline T2I Tab ──────────────────────────────────────────────
+
+    def _crear_tab_pipeline(self, parent):
+        tk.Label(parent, text="Pipeline: Texto → Imagen → OCR → Mano",
+                 font=("Segoe UI", 12, "bold"), fg=TEXT, bg=BG).pack(pady=(16, 4))
+
+        if not _HAS_PIPELINE:
+            tk.Label(parent,
+                     text="⚠ pipeline_t2i.py no encontrado.\n"
+                          "Asegúrate de que esté en la misma carpeta.",
+                     font=("Segoe UI", 10), fg="#e74c3c", bg=BG).pack(pady=20)
+            return
+
+        tk.Label(parent,
+                 text="Escribe un nombre → genera imagen → OCR → envía letras a la mano",
+                 font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG).pack(pady=(0, 10))
+
+        # ── Input field ──
+        frame_input = tk.Frame(parent, bg=BG)
+        frame_input.pack(pady=(0, 6), padx=15, fill=tk.X)
+
+        tk.Label(frame_input, text="Texto:",
+                 font=("Segoe UI", 10), fg=TEXT_DIM, bg=BG).pack(side=tk.LEFT, padx=(0, 6))
+
+        self._pipeline_entry = tk.Entry(
+            frame_input, font=("Consolas", 14), bg=ACCENT, fg=TEXT,
+            insertbackground=TEXT, relief=tk.FLAT, justify=tk.LEFT)
+        self._pipeline_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=4)
+        self._pipeline_entry.insert(0, "Santiago")
+        self._pipeline_entry.bind("<Return>", lambda e: self._ejecutar_pipeline())
+
+        tk.Button(frame_input, text="▶ Generar", font=("Segoe UI", 11, "bold"),
+                  bg="#1abc9c", fg="white", activebackground="#16a085",
+                  relief=tk.FLAT, cursor="hand2",
+                  command=self._ejecutar_pipeline).pack(side=tk.LEFT)
+
+        # Fallback checkbox
+        self._pipeline_fallback_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(parent, text="Forzar fallback (Pillow directo, sin modelo neural)",
+                       variable=self._pipeline_fallback_var,
+                       font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG,
+                       selectcolor=ACCENT, activebackground=BG).pack(pady=(0, 6))
+
+        # ── Image preview + Results side by side ──
+        frame_center = tk.Frame(parent, bg=BG)
+        frame_center.pack(padx=15, fill=tk.X, pady=(0, 8))
+
+        # Left: Image preview
+        frame_img = tk.Frame(frame_center, bg=BG_CARD, relief=tk.GROOVE, bd=1)
+        frame_img.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(frame_img, text="Imagen Generada",
+                 font=("Segoe UI", 9, "bold"), fg=TEXT_DIM, bg=BG_CARD).pack(
+            padx=8, pady=(6, 2))
+
+        self._pipeline_canvas = tk.Canvas(
+            frame_img, width=128, height=128, bg="#111111",
+            highlightthickness=0, relief=tk.FLAT)
+        self._pipeline_canvas.pack(padx=8, pady=(2, 8))
+        self._pipeline_photo = None
+
+        # Right: OCR results
+        frame_results = tk.Frame(frame_center, bg=BG_CARD, relief=tk.GROOVE, bd=1)
+        frame_results.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        tk.Label(frame_results, text="Resultado OCR:",
+                 font=("Segoe UI", 10, "bold"), fg=TEXT_DIM, bg=BG_CARD).pack(
+            anchor="w", padx=10, pady=(8, 2))
+        self._pipeline_ocr_label = tk.Label(
+            frame_results, text="—", font=("Consolas", 16, "bold"),
+            fg=HIGHLIGHT, bg=BG_CARD)
+        self._pipeline_ocr_label.pack(padx=10, pady=(0, 6))
+
+        tk.Label(frame_results, text="Letras para la mano:",
+                 font=("Segoe UI", 10, "bold"), fg=TEXT_DIM, bg=BG_CARD).pack(
+            anchor="w", padx=10, pady=(4, 2))
+        self._pipeline_letters_label = tk.Label(
+            frame_results, text="—", font=("Consolas", 14),
+            fg="#2ecc71", bg=BG_CARD, wraplength=280)
+        self._pipeline_letters_label.pack(padx=10, pady=(0, 8))
+
+        # ── Send button + Status ──
+        frame_bottom = tk.Frame(parent, bg=BG)
+        frame_bottom.pack(pady=(4, 8))
+
+        self._pipeline_send_btn = tk.Button(
+            frame_bottom, text="✋ Enviar a la Mano", font=("Segoe UI", 12, "bold"),
+            bg="#3498db", fg="white", activebackground="#2980b9",
+            relief=tk.FLAT, cursor="hand2", state=tk.DISABLED,
+            command=self._enviar_pipeline_al_robot)
+        self._pipeline_send_btn.pack(side=tk.LEFT, padx=(0, 12))
+
+        self._pipeline_status = tk.Label(
+            frame_bottom, text="⏳ Esperando...",
+            font=("Segoe UI", 10), fg=TEXT_DIM, bg=BG)
+        self._pipeline_status.pack(side=tk.LEFT)
+
+        self._pipeline_letters = []
+
+    def _ejecutar_pipeline(self):
+        texto = self._pipeline_entry.get().strip()
+        if not texto:
+            return
+
+        self._pipeline_status.config(text="⏳ Generando imagen...", fg="#f5a623")
+        self._pipeline_send_btn.config(state=tk.DISABLED)
+        self._pipeline_ocr_label.config(text="...")
+        self._pipeline_letters_label.config(text="...")
+        self._pipeline_canvas.delete("all")
+        self.root.update()
+
+        def run():
+            try:
+                if self._pipeline is None:
+                    force = self._pipeline_fallback_var.get()
+                    self._pipeline = T2IPipeline(force_fallback=force)
+                elif self._pipeline_fallback_var.get() != self._pipeline._use_fallback:
+                    self._pipeline = T2IPipeline(
+                        force_fallback=self._pipeline_fallback_var.get())
+
+                # Generate image
+                image = self._pipeline.generate_image(texto)
+                display_img = image.resize((128, 128))
+                self.root.after(0, lambda: self._mostrar_imagen_pipeline(display_img))
+
+                # Run OCR on the generated image
+                self.root.after(0, lambda: self._pipeline_status.config(
+                    text="⏳ Ejecutando OCR...", fg="#f5a623"))
+
+                from pipeline_t2i import ocr_image
+                recognized = ocr_image(image)
+
+                valid_letters = set("ABCDEFGHIJKLMNÑOPQRSTUVWXYZ")
+                letters = [ch.upper() for ch in recognized if ch.upper() in valid_letters]
+                if not letters:
+                    letters = [ch.upper() for ch in texto if ch.upper() in valid_letters]
+
+                self._pipeline_letters = letters
+
+                self.root.after(0, lambda: self._pipeline_ocr_label.config(
+                    text=" ".join(letters) if letters else "(vacío)"))
+                self.root.after(0, lambda: self._pipeline_letters_label.config(
+                    text=" → ".join(letters) if letters else "(sin letras válidas)"))
+                self.root.after(0, lambda: self._pipeline_status.config(
+                    text=f"✅ {len(letters)} letras listas para enviar", fg="#2ecc71"))
+                if letters:
+                    self.root.after(0, lambda: self._pipeline_send_btn.config(
+                        state=tk.NORMAL))
+            except Exception as e:
+                self.root.after(0, lambda: self._pipeline_status.config(
+                    text=f"❌ Error: {e}", fg="#e74c3c"))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _mostrar_imagen_pipeline(self, pil_image):
+        """Display a PIL image on the pipeline preview canvas."""
+        try:
+            from PIL import ImageTk
+            self._pipeline_photo = ImageTk.PhotoImage(pil_image)
+            self._pipeline_canvas.delete("all")
+            self._pipeline_canvas.create_image(64, 64, image=self._pipeline_photo)
+        except ImportError:
+            self._pipeline_canvas.delete("all")
+            self._pipeline_canvas.create_text(
+                64, 64, text="(Pillow\nsin Tk)", fill=TEXT_DIM,
+                font=("Segoe UI", 9), justify=tk.CENTER)
+
+    def _enviar_pipeline_al_robot(self):
+        """Queue the pipeline-detected letters to the robotic hand."""
+        if not self._pipeline_letters:
+            return
+        letras_validas = set(l.lower() for l in LETRAS)
+        for ch in self._pipeline_letters:
+            ch_lower = ch.lower()
+            if ch_lower in letras_validas:
+                self._cola.append(ch_lower)
+        self._actualizar_lbl_cola()
+        if not self._cola_activa:
+            self._procesar_cola()
+        n = len(self._pipeline_letters)
+        self._pipeline_status.config(
+            text=f"📨 {n} letras enviadas a la mano", fg="#3498db")
+        self._agregar_log(
+            f"[Pipeline] Enviando: {' '.join(self._pipeline_letters)}")
+        self._pipeline_send_btn.config(state=tk.DISABLED)
 
     # ── Log ───────────────────────────────────────────────────────────
 

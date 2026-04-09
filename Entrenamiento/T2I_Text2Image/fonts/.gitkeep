@@ -1,0 +1,4 @@
+# T2I Text-to-Image Fonts Directory
+# Place .ttf font files here for the renderer.
+# DejaVuSans.ttf is the default; the system will auto-search
+# system fonts if this directory is empty.
