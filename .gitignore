@@ -22,3 +22,12 @@ capturas/
 model_saved/
 checkpoints/
 *.result.txt
+
+# Environment secrets
+.env
+
+# Training outputs
+outputs/
+data/
+*.pth
+

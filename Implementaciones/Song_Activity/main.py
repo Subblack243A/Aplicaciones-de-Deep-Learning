@@ -166,6 +166,22 @@ def predict(args):
             f.write(result)
         print(f"Transcripción guardada en '{args.output}'")
 
+    # === NUEVO: Integración de TTS (Opcional) ===
+    if args.sing:
+        import torch
+        from tts_singer import sing_from_text
+        
+        print(f"\n{'-'*60}")
+        print("  Sintetizando Voz Cantada (TTS)...")
+        print(f"{'-'*60}")
+        
+        dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+        sing_from_text(input_source=result, 
+                       model_path=args.tts_ckpt, 
+                       output_path=args.tts_output, 
+                       is_file=False, 
+                       device=dev)
+
     return result
 
 
@@ -275,6 +291,18 @@ Ejemplos:
     predict_parser.add_argument(
         "--n_mels", type=int, default=128,
         help="Bandas mel (default: 128)"
+    )
+    predict_parser.add_argument(
+        "--sing", action="store_true",
+        help="Si se especifica, cantará la transcripción resultante usando Tacotron2 (TTS)"
+    )
+    predict_parser.add_argument(
+        "--tts_ckpt", type=str, default="../../Entrenamiento/TTS_Tacotron2/checkpoints/tacotron2_final.pt",
+        help="Ruta al modelo Tacotron2 (.pt) para generar el canto"
+    )
+    predict_parser.add_argument(
+        "--tts_output", type=str, default="canto_salida.wav",
+        help="Archivo de salida WAV para la voz cantada"
     )
 
     args = parser.parse_args()
