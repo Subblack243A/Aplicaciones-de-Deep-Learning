@@ -5,7 +5,7 @@ import threading
 import json
 import os
 
-ESP32_IP = "192.168.1.50"
+ESP32_IP = "manito.local"
 CALIBRACION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 # ── Colors ────────────────────────────────────────────────────────────

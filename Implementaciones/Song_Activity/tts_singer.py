@@ -3,6 +3,12 @@ import numpy as np
 import os
 import argparse
 import soundfile as sf # soundfile es más moderno y estable que librosa.output
+import sys
+
+# Agregar la ruta relativa hacia los modelos
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+TTS_DIR = os.path.join(SCRIPT_DIR, "../../Entrenamiento/TTS_Tacotron2")
+sys.path.append(TTS_DIR)
 
 from models.tacotron2 import Tacotron2, Tacotron2Config
 from utils.text_utils import text_to_sequence
