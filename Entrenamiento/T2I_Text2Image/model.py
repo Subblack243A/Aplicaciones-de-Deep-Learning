@@ -50,9 +50,10 @@ class TextEncoder(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.layer_norm = nn.LayerNorm(d_model)
-
+ 
     def forward(self, x):
-        padding_mask = x == 0
+        padding_mask = (x == 0)
+        padding_mask[:, 0] = False
         embedded = self.embedding(x) * math.sqrt(self.d_model)
         embedded = self.pos_encoding(embedded)
         features = self.transformer(embedded, src_key_padding_mask=padding_mask)
@@ -96,42 +97,38 @@ class DecoderBlock(nn.Module):
 
 
 class ImageDecoder(nn.Module):
-    """noise(128) → 8×8×512 → 16×16×256 → 32×32×128 → 64×64×64 → 64×64×3"""
-    def __init__(self, noise_dim=NOISE_DIM, d_model=D_MODEL, base_ch=512):
+    """
+    text_latent(D_MODEL) → 8x8x512 → 16x16x256 → 32x32x128 → 64x64x64 → 64x64x3
+    """
+    def __init__(self, d_model=D_MODEL, base_ch=512):
         super().__init__()
         self.base_ch = base_ch
-        self.fc_noise = nn.Sequential(nn.Linear(noise_dim, 8 * 8 * base_ch), nn.GELU())
-        self.block1 = DecoderBlock(base_ch, 256, d_model)
-        self.block2 = DecoderBlock(256, 128, d_model)
-        self.block3 = DecoderBlock(128, 64, d_model)
-        self.final_conv = nn.Sequential(nn.Conv2d(64, 3, kernel_size=3, padding=1), nn.Tanh())
-
-    def forward(self, noise, text_features):
-        B = noise.size(0)
-        x = self.fc_noise(noise).view(B, self.base_ch, 8, 8)
+        self.fc_text = nn.Sequential( nn.Linear(d_model, 8 * 8 * base_ch), nn.GELU())
+        self.block1     = DecoderBlock(base_ch, 256, d_model)
+        self.block2     = DecoderBlock(256, 128, d_model)
+        self.block3     = DecoderBlock(128, 64, d_model)
+        self.final_conv = nn.Sequential( nn.Conv2d(64, 3, kernel_size=3, padding=1), nn.Tanh())
+ 
+    def forward(self, text_features):
+        text_latent = text_features.mean(dim=1)
+        B = text_latent.size(0)
+        x = self.fc_text(text_latent).view(B, self.base_ch, 8, 8)
         x = self.block1(x, text_features)
         x = self.block2(x, text_features)
         x = self.block3(x, text_features)
         return self.final_conv(x)
 
-
 class Text2ImageModel(nn.Module):
-    def __init__(self, vocab_size=VOCAB_SIZE, d_model=D_MODEL, noise_dim=NOISE_DIM):
+    def __init__(self, vocab_size=VOCAB_SIZE, d_model=D_MODEL):
         super().__init__()
-        self.text_encoder = TextEncoder(vocab_size=vocab_size, d_model=d_model)
-        self.image_decoder = ImageDecoder(noise_dim=noise_dim, d_model=d_model)
-        self.noise_dim = noise_dim
-
-    def forward(self, text, noise):
+        self.text_encoder  = TextEncoder(vocab_size=vocab_size, d_model=d_model)
+        self.image_decoder = ImageDecoder(d_model=d_model)
+    def forward(self, text):
         text_features = self.text_encoder(text)
-        return self.image_decoder(noise, text_features)
-
+        return self.image_decoder(text_features)
     @torch.no_grad()
-    def generate(self, text, seed=None, device=None):
+    def generate(self, text, device=None):
         self.eval()
         if device:
             text = text.to(device)
-        if seed is not None:
-            torch.manual_seed(seed)
-        noise = torch.randn(text.size(0), self.noise_dim, device=text.device)
-        return self(text, noise)
+        return self(text)

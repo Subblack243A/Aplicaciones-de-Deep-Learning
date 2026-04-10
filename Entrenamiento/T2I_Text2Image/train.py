@@ -26,7 +26,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 import lpips as lpips_lib
 from captum.attr import LayerIntegratedGradients
 
-from model import Text2ImageModel, NOISE_DIM, MAX_TEXT_LEN, VOCAB_SIZE
+from model import Text2ImageModel, MAX_TEXT_LEN, VOCAB_SIZE
 from dataset import generate_dataset, create_dataloaders, tokenize_text, DATA_DIR
 
 # ── Paths ─────────────────────────────────────────────────────────────
@@ -41,11 +41,13 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ── Training defaults ─────────────────────────────────────────────────
 MAX_EPOCHS = 200
-PATIENCE = 10
+PATIENCE = 15
 MIN_DELTA = 0.001
 LEARNING_RATE = 1e-4
 BATCH_SIZE = 32
 LAMBDA_LPIPS = 0.1
+LPIPS_WARMUP_EPOCHS = 10
+TARGET_ERROR = 0.001
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -63,7 +65,7 @@ class MetricsBundle:
 
     def compute(self, predicted, target):
         loss_mse = self.mse_fn(predicted, target)
-        loss_lpips = self.lpips_fn(predicted, target).mean()
+        loss_lpips = self.lpips_fn(predicted.float(), target.float()).mean()
         total_loss = loss_mse + LAMBDA_LPIPS * loss_lpips
         with torch.no_grad():
             ssim_val = self.ssim_fn(predicted, target)
@@ -79,14 +81,16 @@ class MetricsBundle:
 # Training
 # ══════════════════════════════════════════════════════════════════════
 
-def train_model(model, train_loader, val_loader, max_epochs=MAX_EPOCHS, lr=LEARNING_RATE):
+def train_model(model, train_loader, val_loader, max_epochs=MAX_EPOCHS, lr=LEARNING_RATE,
+                target_error=TARGET_ERROR):
     model.to(DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=1e-6)
     scaler = torch.amp.GradScaler("cuda") if DEVICE.type == "cuda" else None
     metrics = MetricsBundle(DEVICE)
 
     # Early stopping state
-    best_loss = None
+    best_loss = float("inf")
     patience_counter = 0
     stop_reason = ""
 
@@ -99,6 +103,8 @@ def train_model(model, train_loader, val_loader, max_epochs=MAX_EPOCHS, lr=LEARN
     print(f"\n{'='*60}")
     print(f"  Training on {DEVICE} | Max epochs: {max_epochs}")
     print(f"  Patience: {PATIENCE} | Min delta: {MIN_DELTA}")
+    if target_error is not None:
+        print(f"  Target error: {target_error} (stop when val_loss ≤ this)")
     if DEVICE.type == "cuda":
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
         print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
@@ -108,16 +114,16 @@ def train_model(model, train_loader, val_loader, max_epochs=MAX_EPOCHS, lr=LEARN
 
     for epoch in range(max_epochs):
         # ── Train ──
+        cur_lambda_lpips = LAMBDA_LPIPS if epoch >= LPIPS_WARMUP_EPOCHS else 0.0
         model.train()
         t_loss, t_n = 0.0, 0
         for text, real_images in train_loader:
             text, real_images = text.to(DEVICE), real_images.to(DEVICE)
-            noise = torch.randn(text.size(0), NOISE_DIM, device=DEVICE)
             optimizer.zero_grad(set_to_none=True)
 
             if DEVICE.type == "cuda":
                 with torch.amp.autocast("cuda", dtype=torch.float16):
-                    fake = model(text, noise)
+                    fake = model(text)
                     res = metrics.compute(fake, real_images)
                 scaler.scale(res["total_loss"]).backward()
                 scaler.unscale_(optimizer)
@@ -126,7 +132,7 @@ def train_model(model, train_loader, val_loader, max_epochs=MAX_EPOCHS, lr=LEARN
                 scaler.update()
                 torch.cuda.empty_cache()
             else:
-                fake = model(text, noise)
+                fake = model(text)
                 res = metrics.compute(fake, real_images)
                 res["total_loss"].backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -144,13 +150,12 @@ def train_model(model, train_loader, val_loader, max_epochs=MAX_EPOCHS, lr=LEARN
         with torch.no_grad():
             for text, real_images in val_loader:
                 text, real_images = text.to(DEVICE), real_images.to(DEVICE)
-                noise = torch.randn(text.size(0), NOISE_DIM, device=DEVICE)
                 if DEVICE.type == "cuda":
                     with torch.amp.autocast("cuda", dtype=torch.float16):
-                        fake = model(text, noise)
+                        fake = model(text)
                         res = metrics.compute(fake, real_images)
                 else:
-                    fake = model(text, noise)
+                    fake = model(text)
                     res = metrics.compute(fake, real_images)
                 v_totals["loss"] += res["total_loss"].item()
                 v_totals["mse"] += res["mse"].item()
@@ -165,15 +170,19 @@ def train_model(model, train_loader, val_loader, max_epochs=MAX_EPOCHS, lr=LEARN
         history["ssim"].append(avg_val["ssim"])
         history["lpips"].append(avg_val["lpips"])
 
+        cur_lr = optimizer.param_groups[0]["lr"]
         print(
             f"Epoch {epoch+1:03d} | Train: {avg_train:.4f} | "
             f"Val: {avg_val['loss']:.4f} | SSIM: {avg_val['ssim']:.4f} | "
-            f"LPIPS: {avg_val['lpips']:.4f} | MSE: {avg_val['mse']:.4f}"
+            f"LPIPS: {avg_val['lpips']:.4f} | MSE: {avg_val['mse']:.4f} | "
+            f"LR: {cur_lr:.2e}"
         )
 
         # Save best checkpoint
-        if avg_val["loss"] < best_val_loss:
-            best_val_loss = avg_val["loss"]
+        val_loss = avg_val["loss"]
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
@@ -182,18 +191,30 @@ def train_model(model, train_loader, val_loader, max_epochs=MAX_EPOCHS, lr=LEARN
 
         # ── Early stopping ──
         val_loss = avg_val["loss"]
-        if best_loss is None:
-            best_loss = val_loss
-        elif val_loss < best_loss - MIN_DELTA:
+        if val_loss < best_loss - MIN_DELTA:
             best_loss = val_loss
             patience_counter = 0
+            torch.save({
+                "epoch":                epoch,
+                "model_state_dict":     model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+            }, CHECKPOINT_DIR / "best_model.pth")
+            print(f"  ✓ Nuevo mejor modelo guardado (val_loss={best_loss:.4f})")
         else:
             patience_counter += 1
-            print(f"  [EarlyStopping] No improvement {patience_counter}/{PATIENCE}")
+            print(f"  [EarlyStopping] Sin mejora {patience_counter}/{PATIENCE}")
             if patience_counter >= PATIENCE:
                 stop_reason = f"Patience exhausted ({PATIENCE} epochs)"
                 print(f"  >> {stop_reason}")
                 break
+
+        # ── Target error stop ──
+        if target_error is not None and val_loss <= target_error:
+            stop_reason = f"Target error reached (val_loss={val_loss:.6f} ≤ {target_error})"
+            print(f"  🎯 {stop_reason}")
+            break
+
+        scheduler.step()
 
         if epoch + 1 >= max_epochs:
             stop_reason = f"Max epochs ({max_epochs}) reached"
@@ -253,17 +274,15 @@ def plot_metrics(history):
 # XAI — Captum Attention Maps
 # ══════════════════════════════════════════════════════════════════════
 
-def explain_text(model, text, seed=42):
+def explain_text(model, text):
     """Generate per-character attribution map using Captum."""
     model.to(DEVICE).eval()
     XAI_DIR.mkdir(parents=True, exist_ok=True)
 
     tokens = torch.tensor([tokenize_text(text)], dtype=torch.long, device=DEVICE)
-    torch.manual_seed(seed)
-    fixed_noise = torch.randn(1, NOISE_DIM, device=DEVICE)
 
     def forward_fn(text_input):
-        out = model(text_input, fixed_noise)
+        out = model(text_input)
         return out.sum(dim=(1, 2, 3))
 
     lig = LayerIntegratedGradients(forward_fn, model.text_encoder.embedding)
@@ -310,7 +329,12 @@ def main():
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--txt-dir", type=str, default=None)
-    parser.add_argument("--num-samples", type=int, default=5000)
+    parser.add_argument("--num-samples", type=int, default=10000)
+    parser.add_argument(
+        "--target-error", type=float, default=None,
+        metavar="THRESHOLD",
+        help="Stop training when val_loss drops at or below this value (e.g. 0.001)",
+    )
     args = parser.parse_args()
 
     print(f"Device: {DEVICE}")
@@ -338,7 +362,8 @@ def main():
             print(f"Resumed from {ckpt}")
 
     # Step 4: Train
-    train_model(model, train_loader, val_loader, max_epochs=args.max_epochs, lr=args.lr)
+    train_model(model, train_loader, val_loader, max_epochs=args.max_epochs, lr=args.lr,
+                target_error=args.target_error)
 
     # Step 5: XAI samples
     try:

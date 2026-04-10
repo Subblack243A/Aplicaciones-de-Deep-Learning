@@ -7,6 +7,7 @@ create_dataloaders(): Returns (train_loader, val_loader)
 tokenize_text()    : Char→ASCII token ID conversion
 """
 
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -21,7 +22,7 @@ from model import IMG_SIZE, MAX_TEXT_LEN, VOCAB_SIZE
 # ── Config ────────────────────────────────────────────────────────────
 DATA_DIR = Path(__file__).resolve().parent / "data"
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
-NUM_SAMPLES = 5000
+NUM_SAMPLES = 10000
 BATCH_SIZE = 32
 VAL_SPLIT = 0.15
 
@@ -89,21 +90,59 @@ def _find_font(size: int):
 # ── Render single image ──────────────────────────────────────────────
 
 def render_text_image(text, img_size=IMG_SIZE, font_size=None, bg_color=None, text_color=None):
+    """
+    Renderiza el texto de forma DETERMINISTA.
+ 
+    Se crea un generador de números aleatorios LOCAL (random.Random) cuya semilla
+    se deriva del hash MD5 del texto. Esto garantiza que:
+      - El mismo texto → siempre los mismos colores y tamaño de fuente.
+      - El RNG global (usado para shuffle del dataset) no se ve afectado.
+      - Si el dataset se regenera, las imágenes son idénticas a las anteriores.
+ 
+    Los parámetros font_size, bg_color y text_color siguen siendo sobreescribibles
+    desde fuera (útil para tests o visualizaciones manuales).
+    """
+    text_seed = int(hashlib.md5(text.encode("utf-8")).hexdigest(), 16) % (2 ** 32)
+    rng = random.Random(text_seed)
+ 
     if font_size is None:
-        font_size = random.randint(14, 28)
+        font_size = rng.randint(14, 28)
+ 
     if bg_color is None or text_color is None:
-        bg_color, text_color = random.choice(COLOR_PALETTES)
-
-    img = Image.new("RGB", (img_size, img_size), color=bg_color)
+        bg_gray_value = rng.randint(0, 255)
+ 
+        if bg_gray_value > 127:
+            text_gray_value = rng.randint(0, 80)
+        else:
+            text_gray_value = rng.randint(175, 255)
+ 
+        bg_color   = (bg_gray_value,   bg_gray_value,   bg_gray_value)
+        text_color = (text_gray_value, text_gray_value, text_gray_value)
+ 
+    # Crear imagen
+    img  = Image.new("RGB", (img_size, img_size), color=bg_color)
     draw = ImageDraw.Draw(img)
+ 
+    margin     = 10
+    max_width  = img_size - margin
+    max_height = img_size - margin
+ 
     font = _find_font(font_size)
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+ 
+    # Autoescalado: reducir fuente hasta que el texto quepa
+    while (tw > max_width or th > max_height) and font_size > 8:
+        font_size -= 1
+        font = _find_font(font_size)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+ 
     x = max(0, (img_size - tw) // 2)
     y = max(0, (img_size - th) // 2)
+ 
     draw.text((x, y), text, fill=text_color, font=font)
     return img
-
 
 # ── Generate full dataset ─────────────────────────────────────────────
 
