@@ -12,7 +12,7 @@ WebServer server(80);
 Preferences prefs;
 
 #define PIN_PULGAR_PALMA 3
-#define PIN_PULGAR_DEDO 2
+#define PIN_PULGAR_DEDO 11
 #define PIN_INDICE 23
 #define PIN_MEDIO 22
 #define PIN_ANULAR 6
@@ -126,6 +126,38 @@ LetraPos letras[] = {
 char _logBuf[256];
 bool _wsReady = false;
 
+#define MAX_QUEUE 20
+String cmdQueue[MAX_QUEUE];
+int qHead = 0;
+int qTail = 0;
+bool isProcessingCommand = false;
+
+void pushCmd(String c) {
+  int next = (qTail + 1) % MAX_QUEUE;
+  if (next != qHead) {
+    cmdQueue[qTail] = c;
+    qTail = next;
+  } else {
+    Serial.println("Warning: Command queue full!");
+  }
+}
+
+String popCmd() {
+  if (qHead == qTail) return "";
+  String c = cmdQueue[qHead];
+  qHead = (qHead + 1) % MAX_QUEUE;
+  return c;
+}
+
+void safeDelay(unsigned long ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    webSocket.loop();
+    server.handleClient();
+    yield();
+  }
+}
+
 void wsLog(const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
@@ -151,7 +183,7 @@ void moverServo(int pin, int desde, int hasta) {
   for (int step = 1; step <= diff; step++) {
     int pos = desde + (long)(hasta - desde) * step / diff;
     servoWrite(pin, pos);
-    delay(5);
+    safeDelay(5);
   }
   servoWrite(pin, hasta);
 }
@@ -190,7 +222,7 @@ void ponerPosicion(int idx, int med, int anu, int men, int pd, int pp) {
     if (isOpening[fi]) {
       moverServo(fingerPins[fi], *fingerPos[fi], target[fi]);
       *fingerPos[fi] = target[fi];
-      delay(delayBetweenFingers);
+      safeDelay(delayBetweenFingers);
     }
   }
 
@@ -200,7 +232,7 @@ void ponerPosicion(int idx, int med, int anu, int men, int pd, int pp) {
     if (!isOpening[fi] && target[fi] != *fingerPos[fi]) {
       moverServo(fingerPins[fi], *fingerPos[fi], target[fi]);
       *fingerPos[fi] = target[fi];
-      delay(delayBetweenFingers);
+      safeDelay(delayBetweenFingers);
     }
   }
 
@@ -212,7 +244,7 @@ void ponerPosicion(int idx, int med, int anu, int men, int pd, int pp) {
 
 void ejecutarMovimientos(LetraPos &letra) {
   if (letra.numMovements <= 0) return;
-  delay(delayBeforeMovements);
+  safeDelay(delayBeforeMovements);
 
   for (int m = 0; m < letra.numMovements && m < MAX_MOVEMENTS; m++) {
     FingerMovement &mov = letra.movements[m];
@@ -228,10 +260,10 @@ void ejecutarMovimientos(LetraPos &letra) {
     for (int r = 0; r < mov.repeat; r++) {
       moverServo(pin, *posRef, targetPos);
       *posRef = targetPos;
-      delay(mov.delayMs);
+      safeDelay(mov.delayMs);
       moverServo(pin, *posRef, origPos);
       *posRef = origPos;
-      delay(mov.delayMs);
+      safeDelay(mov.delayMs);
     }
   }
 }
@@ -242,7 +274,7 @@ void abrirPulgar() {
   // Open thumb: pd first, then pp (open order for thumb)
   moverServo(PIN_PULGAR_DEDO, posPulgarDedo, 0);
   posPulgarDedo = 0;
-  delay(delayBetweenFingers);
+  safeDelay(delayBetweenFingers);
   moverServo(PIN_PULGAR_PALMA, posPulgarPalma, 0);
   posPulgarPalma = 0;
 }
@@ -254,12 +286,12 @@ void cerrarPulgar(int targetPd, int targetPp) {
   if (targetPp != posPulgarPalma) {
     moverServo(PIN_PULGAR_PALMA, posPulgarPalma, targetPp);
     posPulgarPalma = targetPp;
-    delay(delayBetweenFingers);
+    safeDelay(delayBetweenFingers);
   }
   if (targetPd != posPulgarDedo) {
     moverServo(PIN_PULGAR_DEDO, posPulgarDedo, targetPd);
     posPulgarDedo = targetPd;
-    delay(delayBetweenFingers);
+    safeDelay(delayBetweenFingers);
   }
 }
 
@@ -268,7 +300,7 @@ void moverDedo(int fi, int target) {
   if (target != *fingerPos[fi]) {
     moverServo(fingerPins[fi], *fingerPos[fi], target);
     *fingerPos[fi] = target;
-    delay(delayBetweenFingers);
+    safeDelay(delayBetweenFingers);
   }
 }
 
@@ -1181,7 +1213,7 @@ void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload,
       char buf[length + 1];
       memcpy(buf, payload, length);
       buf[length] = '\0';
-      procesarComando(String(buf));
+      pushCmd(String(buf));
     }
     break;
   }
@@ -1265,6 +1297,13 @@ void loop() {
 
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
+    pushCmd(cmd);
+  }
+
+  if (qHead != qTail && !isProcessingCommand) {
+    isProcessingCommand = true;
+    String cmd = popCmd();
     procesarComando(cmd);
+    isProcessingCommand = false;
   }
 }

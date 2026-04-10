@@ -149,6 +149,9 @@ class ManitoApp:
         try:
             with open(CALIBRACION_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if "ip" in data:
+                global ESP32_IP
+                ESP32_IP = data["ip"]
             if "settings" in data:
                 for k, v in data["settings"].items():
                     if k in self.settings and isinstance(v, (int, float)):
@@ -190,8 +193,12 @@ class ManitoApp:
                     "pre_thumb": self.pre_thumb.get(k, []),
                     "movements": self.movimientos.get(k, []),
                 }
+            
+            ip_to_save = self.entry_ip.get().strip() if hasattr(self, 'entry_ip') else ESP32_IP
+            
             with open(CALIBRACION_FILE, "w", encoding="utf-8") as f:
                 json.dump({
+                    "ip": ip_to_save,
                     "settings": self.settings,
                     "limits": self.limits,
                     "letters": letters_data
@@ -1159,12 +1166,26 @@ class ManitoApp:
                 text="● Conectado", fg="#2ecc71"))
             self._log_seguro(f"Conectado a {uri}")
             self._iniciar_escucha()
+            
+            # Guardamos la ip utilizada sólo si conectó bien
+            self._guardar_config_local()
+
             # Push local config.json as source of truth
             self.root.after(900, self._push_config_to_esp32)
         except Exception as e:
             self.conectado = False
             self.root.after(0, lambda: self.lbl_estado.config(
                 text="● Desconectado", fg="#e74c3c"))
+            
+            error_str = str(e).lower()
+            if "name or service not known" in error_str or "getaddrinfo" in error_str:
+                self.root.after(0, lambda: messagebox.showwarning(
+                    "Error de Resolución IP",
+                    "No se pudo encontrar a 'manito.local' en tu red.\n\n"
+                    "Por favor, revisa el Monitor Serial de Arduino, copia la IP de la ESP32 "
+                    "(por ejemplo 192.168.x.x o 192.168.4.1 si es AP) y pégala en la casilla de IP arriba."
+                ))
+            
             self._log_seguro(f"Error conectando: {e}")
 
     def _push_config_to_esp32(self):
