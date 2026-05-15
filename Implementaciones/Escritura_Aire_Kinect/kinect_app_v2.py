@@ -30,6 +30,15 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 import base64
 
+# --- IMPORTS DEL PIPELINE FULL ---
+import pygame
+from pipeline.ocr_module import ocr_from_opencv
+from pipeline.t2i_module import generate_and_save
+from pipeline.tts_module import synthesize
+from pipeline.gender_detector import detect_gender
+from pipeline.hand_module import HandController
+from pipeline import config as pipeline_config
+
 # --- SOPORTE UTF-8 PARA CONSOLA WINDOWS ---
 if sys.platform == "win32":
     import io
@@ -139,6 +148,13 @@ class KinectApp:
         _m = __import__(_m_p, fromlist=[_c_n])
         _C = getattr(_m, _c_n)
         self.sing_activity_client = _C(api_key=_conf_k)
+
+        # --- Pipeline Full: Hand Controller ---
+        self.hand_controller = HandController()
+        self.hand_controller.connect()
+
+        # --- Pipeline Full: Resultados cacheados ---
+        self._pipeline_results = {}  # timestamp -> {"texto", "img_path", "audio_path"}
 
         # --- Panel de Control (Tkinter) ---
         self._crear_panel_control()
@@ -283,8 +299,12 @@ class KinectApp:
                                     f"Texto capturado:\n\n{texto if texto else '(No se detectó texto)'}")
             else:
                 print(f"Texto guardado en: {path}")
-                # Ejecutar el post-procesamiento con el modelo de sing-activity
-                self._process_sing_activity_inference(texto, os.path.join(SAVE_DIR, f"audio_{os.path.basename(path).replace('.txt', '.mp3')}"))
+                # ── Pipeline Full: ejecutar todo el flujo ──
+                threading.Thread(
+                    target=self._run_full_pipeline,
+                    args=(texto, os.path.basename(path).replace('.txt', '')),
+                    daemon=True
+                ).start()
                 return texto
 
     def _process_sing_activity_inference(self, texto, nombre_archivo="salida.mp3"):
@@ -331,6 +351,192 @@ class KinectApp:
             print(f"[Sing-Activity] Resultado guardado como {nombre_archivo}")
         except Exception as _e_inference:
             print(f"[Sing-Activity] Error durante la fase de inferencia: {_e_inference}")
+
+    # =========================================================
+    #  PIPELINE FULL — Flujo completo post-OCR
+    # =========================================================
+
+    def _run_full_pipeline(self, texto: str, base_name: str):
+        """
+        Ejecuta T2I, TTS y prepara datos para la mano.
+        Se ejecuta en un hilo background para no bloquear la UI.
+        """
+        if not texto:
+            print("[Pipeline] Texto vacío, abortando pipeline.")
+            return
+
+        print(f"\n{'='*50}")
+        print(f"[Pipeline] Iniciando pipeline para: '{texto}'")
+        print(f"{'='*50}\n")
+
+        results = {"texto": texto, "img_path": None, "audio_path": None}
+
+        # 1) T2I — Generar imagen del nombre
+        try:
+            print("[Pipeline] Generando imagen (T2I)...")
+            img_path = generate_and_save(texto, seed=42)
+            results["img_path"] = img_path
+            print(f"[Pipeline] Imagen guardada: {img_path}")
+        except Exception as e:
+            print(f"[Pipeline] Error T2I: {e}")
+
+        # 2) TTS — Generar audio del nombre
+        try:
+            print("[Pipeline] Generando audio (TTS)...")
+            gender = detect_gender(texto)
+            print(f"[Pipeline] Género detectado: {gender}")
+            audio_path = synthesize(
+                texto,
+                output_path=os.path.join(pipeline_config.TTS_OUTPUT_DIR, f"{base_name}.mp3"),
+                voice_gender=gender
+            )
+            results["audio_path"] = audio_path
+            print(f"[Pipeline] Audio guardado: {audio_path}")
+        except Exception as e:
+            print(f"[Pipeline] Error TTS: {e}")
+
+        # Guardar resultados
+        self._pipeline_results[base_name] = results
+
+        # Abrir panel de resultados en el hilo principal de Tkinter
+        try:
+            self.root.after(0, lambda: self._show_results_panel(base_name))
+        except Exception:
+            pass
+
+        print(f"[Pipeline] Pipeline completado para '{texto}'\n")
+
+    # =========================================================
+    #  PANEL DE RESULTADOS (Tkinter Toplevel)
+    # =========================================================
+
+    def _show_results_panel(self, base_name: str):
+        """Muestra una ventana con los resultados del pipeline."""
+        results = self._pipeline_results.get(base_name)
+        if not results:
+            return
+
+        texto = results["texto"]
+        img_path = results["img_path"]
+        audio_path = results["audio_path"]
+
+        # Crear ventana emergente
+        win = tk.Toplevel(self.root)
+        win.title(f"Resultados — {texto}")
+        win.configure(bg="#1e1e2e")
+        win.geometry("500x620")
+        win.resizable(False, False)
+
+        # Título
+        tk.Label(win, text="Pipeline Full", font=("Helvetica", 16, "bold"),
+                 bg="#1e1e2e", fg="#89b4fa").pack(pady=(16, 8))
+
+        tk.Label(win, text=f"Nombre reconocido: '{texto}'",
+                 font=("Consolas", 14, "bold"), bg="#1e1e2e", fg="white").pack(pady=(0, 12))
+
+        # ── Botón: Mostrar Imagen ──
+        if img_path and os.path.exists(img_path):
+            btn_img = tk.Button(
+                win, text="🖼 Mostrar Imagen Generada", font=("Helvetica", 11, "bold"),
+                bg="#313244", fg="white", activebackground="#45475a",
+                relief="flat", cursor="hand2",
+                command=lambda: self._show_image(img_path)
+            )
+            btn_img.pack(pady=6, ipadx=10, ipady=4)
+        else:
+            tk.Label(win, text="(Imagen no generada)",
+                     font=("Helvetica", 10), bg="#1e1e2e", fg="#585b70").pack(pady=6)
+
+        # ── Botón: Reproducir Audio ──
+        if audio_path and os.path.exists(audio_path):
+            btn_audio = tk.Button(
+                win, text="🔊 Reproducir Audio", font=("Helvetica", 11, "bold"),
+                bg="#313244", fg="white", activebackground="#45475a",
+                relief="flat", cursor="hand2",
+                command=lambda: self._play_audio(audio_path)
+            )
+            btn_audio.pack(pady=6, ipadx=10, ipady=4)
+        else:
+            tk.Label(win, text="(Audio no generado)",
+                     font=("Helvetica", 10), bg="#1e1e2e", fg="#585b70").pack(pady=6)
+
+        # ── Botón: Enviar a la Mano ──
+        btn_hand = tk.Button(
+            win, text="✋ Enviar a la Mano (LSC)", font=("Helvetica", 12, "bold"),
+            bg="#e94560", fg="white", activebackground="#d63050",
+            relief="flat", cursor="hand2",
+            command=lambda: self._send_to_hand(texto)
+        )
+        btn_hand.pack(pady=(16, 6), ipadx=12, ipady=6)
+
+        # Estado de la mano
+        hand_status = "Conectado" if self.hand_controller.connected else "Modo simulado (MOCK)"
+        hand_color = "#2ecc71" if self.hand_controller.connected else "#f5a623"
+        tk.Label(win, text=f"Estado mano: {hand_status}",
+                 font=("Helvetica", 9), bg="#1e1e2e", fg=hand_color).pack(pady=(0, 12))
+
+        # Separador
+        tk.Frame(win, bg="#45475a", height=1).pack(fill=tk.X, padx=30, pady=10)
+
+        # Instrucciones
+        instrucciones = (
+            "Instrucciones:\n"
+            "• La imagen y el audio se generaron automáticamente.\n"
+            "• Toca 'Mostrar Imagen' para ver la imagen generada.\n"
+            "• Toca 'Reproducir Audio' para escuchar el nombre.\n"
+            "• Toca 'Enviar a la Mano' para que deletree en LSC.\n"
+            "• Si el OCR no quedó perfecto, borra y escribe de nuevo."
+        )
+        tk.Label(win, text=instrucciones, font=("Consolas", 9),
+                 bg="#1e1e2e", fg="#a6adc8", justify="left").pack(pady=10, padx=20)
+
+        # Cerrar
+        tk.Button(win, text="Cerrar", font=("Helvetica", 10),
+                  bg="#45475a", fg="white", activebackground="#585b70",
+                  relief="flat", cursor="hand2",
+                  command=win.destroy).pack(pady=(10, 16))
+
+    def _show_image(self, img_path: str):
+        """Abre una ventana con la imagen generada."""
+        try:
+            from PIL import Image, ImageTk
+            win = tk.Toplevel(self.root)
+            win.title("Imagen Generada")
+            win.configure(bg="#1e1e2e")
+
+            img = Image.open(img_path)
+            # Escalar si es muy grande
+            max_size = 512
+            if max(img.size) > max_size:
+                img.thumbnail((max_size, max_size))
+
+            photo = ImageTk.PhotoImage(img)
+            lbl = tk.Label(win, image=photo, bg="#1e1e2e")
+            lbl.image = photo  # Keep reference
+            lbl.pack(padx=10, pady=10)
+
+            tk.Label(win, text=img_path, font=("Consolas", 8),
+                     bg="#1e1e2e", fg="#585b70").pack(pady=(0, 10))
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir la imagen:\n{e}")
+
+    def _play_audio(self, audio_path: str):
+        """Reproduce el audio generado usando pygame."""
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            pygame.mixer.music.load(audio_path)
+            pygame.mixer.music.play()
+            print(f"[Pipeline] Reproduciendo audio: {audio_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo reproducir el audio:\n{e}")
+
+    def _send_to_hand(self, texto: str):
+        """Envía el texto a la mano robótica para deletrear en LSC."""
+        if not texto:
+            return
+        self.hand_controller.send_text(texto)
+        print(f"[Pipeline] Enviando a la mano: '{texto}'")
 
     # =========================================================
     #  DETECCIÓN DE GESTOS DE LA MANO
