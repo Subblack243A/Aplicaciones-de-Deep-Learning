@@ -9,8 +9,6 @@ import json
 import threading
 import time
 
-import websocket
-
 from . import config
 
 
@@ -32,6 +30,13 @@ class HandController:
             print("[Hand] Modo MOCK activado. No se conectará a ningún dispositivo.")
             self.connected = True
             return True
+
+        try:
+            import websocket
+        except ImportError:
+            print("[Hand] ERROR: websocket-client no está instalado. pip install websocket-client")
+            self.connected = False
+            return False
 
         url = f"ws://{config.HAND_IP}:{config.HAND_PORT}/ws"
         try:
