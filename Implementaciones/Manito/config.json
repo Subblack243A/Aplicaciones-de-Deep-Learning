@@ -1,87 +1,438 @@
 {
+  "ip": "10.157.97.197",
   "settings": {
     "delay_between_fingers_ms": 50,
     "delay_between_letters_ms": 1500,
     "delay_before_movements_ms": 200
   },
   "limits": {
-    "idx": { "min": 0, "max": 190 },
-    "med": { "min": 0, "max": 180 },
-    "anu": { "min": 0, "max": 180 },
-    "men": { "min": 0, "max": 180 },
-    "pd":  { "min": 0, "max": 120 },
-    "pp":  { "min": 0, "max": 90 }
+    "idx": {
+      "min": 0,
+      "max": 190
+    },
+    "med": {
+      "min": 0,
+      "max": 180
+    },
+    "anu": {
+      "min": 0,
+      "max": 180
+    },
+    "men": {
+      "min": 0,
+      "max": 180
+    },
+    "pd": {
+      "min": 0,
+      "max": 120
+    },
+    "pp": {
+      "min": 0,
+      "max": 90
+    }
   },
   "letters": {
-    "a": { "pos": [180, 180, 180, 180,  60,   0], "pre_thumb": [], "movements": [] },
-    "b": { "pos": [  0,   0,   0,   0, 120,  50], "pre_thumb": [], "movements": [] },
-    "c": { "pos": [ 90,  90,  90,  90,  45,   0], "pre_thumb": [], "movements": [] },
-    "d": { "pos": [  0, 180, 180, 180,  60,  25], "pre_thumb": [], "movements": [] },
-    "e": { "pos": [ 90,  90,  95,  90,   0,  37], "pre_thumb": [], "movements": [] },
-    "f": { "pos": [120,   0,   0,   0,  90,  30], "pre_thumb": [], "movements": [] },
+    "a": {
+      "pos": [
+        180,
+        180,
+        180,
+        180,
+        98,
+        55
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "b": {
+      "pos": [
+        0,
+        0,
+        0,
+        0,
+        120,
+        50
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "c": {
+      "pos": [
+        90,
+        90,
+        90,
+        90,
+        45,
+        0
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "d": {
+      "pos": [
+        0,
+        180,
+        124,
+        125,
+        87,
+        35
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "e": {
+      "pos": [
+        90,
+        90,
+        95,
+        90,
+        0,
+        37
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "f": {
+      "pos": [
+        120,
+        0,
+        0,
+        0,
+        90,
+        30
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
     "g": {
-      "pos": [0, 180, 180, 180, 0, 0],
+      "pos": [
+        0,
+        180,
+        180,
+        180,
+        0,
+        0
+      ],
       "pre_thumb": [],
       "movements": [
-        { "finger": "idx", "to": 180, "repeat": 3, "delay_ms": 200 }
+        {
+          "finger": "idx",
+          "to": 180,
+          "repeat": 3,
+          "delay_ms": 200
+        }
       ]
     },
-    "h": { "pos": [  0,   0, 180, 180, 120,  50], "pre_thumb": [], "movements": [] },
-    "i": { "pos": [180, 180, 180,   0,  60,  25], "pre_thumb": [], "movements": [] },
+    "h": {
+      "pos": [
+        0,
+        0,
+        180,
+        180,
+        120,
+        50
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "i": {
+      "pos": [
+        180,
+        180,
+        180,
+        0,
+        60,
+        25
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
     "j": {
-      "pos": [180, 180, 180, 0, 60, 25],
+      "pos": [
+        180,
+        180,
+        180,
+        0,
+        60,
+        25
+      ],
       "pre_thumb": [],
       "movements": [
-        { "finger": "men", "to": 40, "repeat": 1, "delay_ms": 150 }
+        {
+          "finger": "men",
+          "to": 40,
+          "repeat": 1,
+          "delay_ms": 150
+        }
       ]
     },
-    "k": { "pos": [  0,   0, 180, 180,  45,  25], "pre_thumb": [], "movements": [] },
-    "l": { "pos": [  0, 180, 180, 180,   0,   0], "pre_thumb": [], "movements": [] },
+    "k": {
+      "pos": [
+        0,
+        0,
+        180,
+        180,
+        45,
+        25
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "l": {
+      "pos": [
+        0,
+        180,
+        180,
+        180,
+        0,
+        0
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
     "m": {
-      "pos": [90, 90, 90, 180, 120, 50],
-      "pre_thumb": ["men"],
+      "pos": [
+        90,
+        90,
+        90,
+        180,
+        120,
+        50
+      ],
+      "pre_thumb": [
+        "men"
+      ],
       "movements": []
     },
     "n": {
-      "pos": [90, 90, 180, 180, 120, 40],
-      "pre_thumb": ["anu", "men"],
+      "pos": [
+        90,
+        90,
+        180,
+        180,
+        120,
+        40
+      ],
+      "pre_thumb": [
+        "anu",
+        "men"
+      ],
       "movements": []
     },
     "ñ": {
-      "pos": [90, 90, 180, 180, 120, 40],
-      "pre_thumb": ["anu", "men"],
+      "pos": [
+        90,
+        90,
+        180,
+        180,
+        120,
+        40
+      ],
+      "pre_thumb": [
+        "anu",
+        "men"
+      ],
       "movements": [
-        { "finger": "idx", "to": -90, "repeat": 2, "delay_ms": 150 },
-        { "finger": "med", "to": -90, "repeat": 2, "delay_ms": 150 }
+        {
+          "finger": "idx",
+          "to": -90,
+          "repeat": 2,
+          "delay_ms": 150
+        },
+        {
+          "finger": "med",
+          "to": -90,
+          "repeat": 2,
+          "delay_ms": 150
+        }
       ]
     },
-    "o": { "pos": [120, 120, 120, 120,  60,  25], "pre_thumb": [], "movements": [] },
-    "p": { "pos": [  0,   0, 180, 180,  45,   0], "pre_thumb": [], "movements": [] },
-    "q": { "pos": [180, 180, 180, 180,   0,   0], "pre_thumb": [], "movements": [] },
-    "r": { "pos": [  0,   0, 180, 180, 120,  50], "pre_thumb": [], "movements": [] },
+    "o": {
+      "pos": [
+        120,
+        120,
+        120,
+        120,
+        60,
+        25
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "p": {
+      "pos": [
+        0,
+        0,
+        180,
+        180,
+        45,
+        0
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "q": {
+      "pos": [
+        180,
+        180,
+        180,
+        180,
+        0,
+        0
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "r": {
+      "pos": [
+        0,
+        0,
+        180,
+        180,
+        120,
+        50
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
     "s": {
-      "pos": [30, 30, 30, 30, 0, 0],
+      "pos": [
+        0,
+        174,
+        175,
+        175,
+        0,
+        0
+      ],
       "pre_thumb": [],
       "movements": [
-        { "finger": "pp", "to": 50, "repeat": 1, "delay_ms": 150 },
-        { "finger": "idx", "to": 30, "repeat": 1, "delay_ms": 100 },
-        { "finger": "pp", "to": 50, "repeat": 1, "delay_ms": 150 },
-        { "finger": "idx", "to": 30, "repeat": 1, "delay_ms": 100 },
-        { "finger": "pp", "to": 50, "repeat": 1, "delay_ms": 150 }
+        {
+          "finger": "pp",
+          "to": 50,
+          "repeat": 1,
+          "delay_ms": 150
+        },
+        {
+          "finger": "idx",
+          "to": 30,
+          "repeat": 1,
+          "delay_ms": 100
+        },
+        {
+          "finger": "pp",
+          "to": 50,
+          "repeat": 1,
+          "delay_ms": 150
+        },
+        {
+          "finger": "idx",
+          "to": 30,
+          "repeat": 1,
+          "delay_ms": 100
+        },
+        {
+          "finger": "pp",
+          "to": 50,
+          "repeat": 1,
+          "delay_ms": 150
+        }
       ]
     },
-    "t": { "pos": [180, 180, 180, 180,  60,  30], "pre_thumb": [], "movements": [] },
-    "u": { "pos": [  0,   0, 180, 180,  60,  25], "pre_thumb": [], "movements": [] },
-    "v": { "pos": [  0,   0, 180, 180, 120,  50], "pre_thumb": [], "movements": [] },
-    "w": { "pos": [  0,   0,   0, 180, 120,  50], "pre_thumb": [], "movements": [] },
-    "x": { "pos": [ 90, 180, 180, 180,  60,  25], "pre_thumb": [], "movements": [] },
-    "y": { "pos": [180, 180, 180,   0,   0,   0], "pre_thumb": [], "movements": [] },
+    "t": {
+      "pos": [
+        180,
+        180,
+        180,
+        180,
+        60,
+        30
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "u": {
+      "pos": [
+        0,
+        180,
+        180,
+        0,
+        60,
+        25
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "v": {
+      "pos": [
+        0,
+        0,
+        180,
+        180,
+        120,
+        50
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "w": {
+      "pos": [
+        0,
+        0,
+        0,
+        180,
+        120,
+        50
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "x": {
+      "pos": [
+        90,
+        180,
+        180,
+        180,
+        60,
+        25
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
+    "y": {
+      "pos": [
+        180,
+        180,
+        180,
+        0,
+        0,
+        0
+      ],
+      "pre_thumb": [],
+      "movements": []
+    },
     "z": {
-      "pos": [0, 180, 180, 180, 120, 50],
+      "pos": [
+        0,
+        180,
+        180,
+        180,
+        120,
+        50
+      ],
       "pre_thumb": [],
       "movements": [
-        { "finger": "anu", "to": -30, "repeat": 2, "delay_ms": 150 },
-        { "finger": "med", "to": -30, "repeat": 2, "delay_ms": 150 }
+        {
+          "finger": "anu",
+          "to": -30,
+          "repeat": 2,
+          "delay_ms": 150
+        },
+        {
+          "finger": "med",
+          "to": -30,
+          "repeat": 2,
+          "delay_ms": 150
+        }
       ]
     }
   }
